@@ -30,6 +30,15 @@ except ImportError:
     PARAKEET_AVAILABLE = False
     LOG.debug("Parakeet backend not available")
 
+# Try to import HTTP backend
+try:
+    from .http_adapter import HttpBackend, HttpDialect, HTTPX_AVAILABLE
+except ImportError:
+    HttpBackend = None
+    HttpDialect = None
+    HTTPX_AVAILABLE = False
+    LOG.debug("HTTP backend not available")
+
 __all__ = [
     "BackendRegistry",
     "get_registry",
@@ -40,6 +49,9 @@ __all__ = [
     "WHISPER_AVAILABLE",
     "ParakeetBackend",
     "PARAKEET_AVAILABLE",
+    "HttpBackend",
+    "HttpDialect",
+    "HTTPX_AVAILABLE",
     "register_default_backends",
 ]
 

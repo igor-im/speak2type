@@ -1,0 +1,186 @@
+openapi: 3.0.3
+info:
+  title: speak2type Transcription Server
+  description: |
+    Reference HTTP server for speech-to-text transcription.
+    Supports both generic and OpenAI-compatible endpoints.
+  version: 0.1.0
+  license:
+    name: GPL-3.0
+    url: https://www.gnu.org/licenses/gpl-3.0.en.html
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+paths:
+  /:
+    get:
+      summary: Health check
+      description: Check server status and backend configuration
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  backend:
+                    type: string
+                    example: whisper
+                  version:
+                    type: string
+                    example: 0.1.0
+
+  /transcribe:
+    post:
+      summary: Generic transcription
+      description: |
+        Transcribe audio using the generic dialect.
+        Returns text and optional segments with timing.
+      operationId: transcribeGeneric
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - audio
+              properties:
+                audio:
+                  type: string
+                  format: binary
+                  description: Audio file (WAV or raw PCM)
+                locale:
+                  type: string
+                  default: en_US
+                  description: Locale hint (e.g., "en_US", "fr_FR")
+      responses:
+        '200':
+          description: Transcription successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GenericTranscriptionResponse'
+        '400':
+          description: Bad request (invalid audio format)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /v1/audio/transcriptions:
+    post:
+      summary: OpenAI-compatible transcription
+      description: |
+        Transcribe audio using the OpenAI-compatible dialect.
+        Compatible with the OpenAI Audio API.
+      operationId: transcribeOpenAI
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+                - model
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Audio file to transcribe
+                model:
+                  type: string
+                  default: whisper-1
+                  description: Model to use (ignored, uses configured backend)
+                language:
+                  type: string
+                  description: Language code (e.g., "en")
+                response_format:
+                  type: string
+                  default: json
+                  enum: [json]
+                  description: Response format
+      responses:
+        '200':
+          description: Transcription successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenAITranscriptionResponse'
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  schemas:
+    TranscriptionSegment:
+      type: object
+      required:
+        - text
+        - start
+        - end
+      properties:
+        text:
+          type: string
+          description: Transcribed text for this segment
+        start:
+          type: number
+          format: float
+          description: Start time in seconds
+        end:
+          type: number
+          format: float
+          description: End time in seconds
+        confidence:
+          type: number
+          format: float
+          nullable: true
+          description: Confidence score (0-1)
+
+    GenericTranscriptionResponse:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Full transcribed text
+        segments:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/TranscriptionSegment'
+          description: Word or phrase segments with timing
+        language:
+          type: string
+          nullable: true
+          description: Detected or used language
+
+    OpenAITranscriptionResponse:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Transcribed text
+
+    Error:
+      type: object
+      required:
+        - detail
+      properties:
+        detail:
+          type: string
+          description: Error message
