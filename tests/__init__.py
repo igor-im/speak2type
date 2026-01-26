@@ -1,0 +1,1 @@
+"""speak2type tests."""
