@@ -22,6 +22,14 @@ except ImportError:
     WHISPER_AVAILABLE = False
     LOG.debug("Whisper backend not available")
 
+# Try to import Parakeet backend
+try:
+    from .parakeet_adapter import ParakeetBackend, PARAKEET_AVAILABLE
+except ImportError:
+    ParakeetBackend = None
+    PARAKEET_AVAILABLE = False
+    LOG.debug("Parakeet backend not available")
+
 __all__ = [
     "BackendRegistry",
     "get_registry",
@@ -30,6 +38,8 @@ __all__ = [
     "VOSK_AVAILABLE",
     "WhisperBackend",
     "WHISPER_AVAILABLE",
+    "ParakeetBackend",
+    "PARAKEET_AVAILABLE",
     "register_default_backends",
 ]
 
@@ -64,3 +74,14 @@ def register_default_backends(registry: BackendRegistry | None = None) -> None:
                 LOG.info("Whisper available but no model loaded")
         except Exception as e:
             LOG.warning("Failed to initialize Whisper: %s", e)
+
+    # Try to register Parakeet
+    if PARAKEET_AVAILABLE and ParakeetBackend is not None:
+        try:
+            backend = ParakeetBackend()
+            if backend.is_available:
+                registry.register(backend)
+            else:
+                LOG.info("Parakeet available but no model loaded")
+        except Exception as e:
+            LOG.warning("Failed to initialize Parakeet: %s", e)
