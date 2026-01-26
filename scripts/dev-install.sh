@@ -61,7 +61,6 @@ install_system_deps() {
         gir1.2-gstreamer-1.0 \
         gir1.2-gst-plugins-base-1.0 \
         ibus \
-        ibus-daemon \
         libibus-1.0-dev \
         gstreamer1.0-plugins-base \
         gstreamer1.0-plugins-good \
