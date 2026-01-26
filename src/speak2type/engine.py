@@ -14,6 +14,8 @@ from gi.repository import IBus, GLib, Gio
 
 from .types import EngineState, RecordMode, AudioSource, TranscriptResult
 from .audio_capture import AudioCapture
+from .worker import TranscriptionWorker
+from .backends import get_registry, register_default_backends
 
 LOG = logging.getLogger(__name__)
 
@@ -61,14 +63,12 @@ class Speak2TypeEngine(IBus.Engine):
         self._load_settings()
 
         # Audio capture
-        audio_source = AudioSource(self._settings.get_string("audio-source") or "auto")
+        audio_source_str = self._settings.get_string("audio-source")
+        audio_source = AudioSource(audio_source_str) if audio_source_str else AudioSource.AUTO
         self._audio_capture = AudioCapture(audio_source=audio_source)
 
-        # Worker thread (will be initialized with backend)
-        self._worker = None
-
-        # Backend (placeholder - will be set up by backend registry)
-        self._backend = None
+        # Set up backend from registry
+        self._setup_backend()
 
         # Properties for IBus panel
         self._prop_list = self._create_properties()
@@ -77,6 +77,47 @@ class Speak2TypeEngine(IBus.Engine):
         self._pending_text = ""
 
         LOG.info("Speak2TypeEngine created")
+
+    def _setup_backend(self) -> None:
+        """Set up the speech recognition backend and worker thread."""
+        # Register default backends
+        register_default_backends()
+
+        # Get configured backend from settings
+        backend_id = self._settings.get_string("backend") or "vosk"
+        registry = get_registry()
+
+        # Try to set the configured backend
+        if not registry.set_current(backend_id):
+            LOG.warning("Configured backend '%s' not available, using fallback", backend_id)
+            # Try alternatives
+            for alt_id in ["vosk", "whisper", "placeholder"]:
+                if registry.set_current(alt_id):
+                    break
+
+        # Get the current backend
+        backend = registry.get_or_placeholder()
+        LOG.info("Using backend: %s (%s)", backend.id, backend.name)
+
+        # Create worker thread with the backend
+        self._worker = TranscriptionWorker(
+            backend=backend,
+            on_result=self._on_transcription_result,
+            on_error=self._on_transcription_error,
+        )
+
+    def _on_transcription_error(self, error: Exception) -> None:
+        """Handle transcription error (called in main loop)."""
+        LOG.error("Transcription error: %s", error)
+
+        # Clear preedit
+        self.update_preedit_text(
+            IBus.Text.new_from_string(""),
+            0,
+            False,
+        )
+
+        self._transition_to(EngineState.IDLE)
 
     def _load_settings(self) -> None:
         """Load settings from GSettings."""
@@ -329,6 +370,10 @@ class Speak2TypeEngine(IBus.Engine):
 
         # Set up audio capture
         self._audio_capture.setup(on_error=self._on_audio_error)
+
+        # Start worker thread
+        if self._worker:
+            self._worker.start()
 
         # Register properties
         self.register_properties(self._prop_list)
