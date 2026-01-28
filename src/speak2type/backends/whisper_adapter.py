@@ -226,7 +226,7 @@ class WhisperBackend:
 
             text = " ".join(text_parts).strip()
 
-            LOG.info("Whisper transcription: '%s'", text)
+            LOG.debug("Whisper transcription: '%s'", text)
 
             return TranscriptResult(
                 text=text,

@@ -167,7 +167,7 @@ class ParakeetBackend:
             text = self._model.recognize(audio_float, sample_rate=segment.format.sample_rate)
             text = text.strip() if text else ""
 
-            LOG.info("Parakeet transcription: '%s'", text)
+            LOG.debug("Parakeet transcription: '%s'", text)
 
             return TranscriptResult(
                 text=text,

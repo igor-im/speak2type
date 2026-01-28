@@ -183,7 +183,7 @@ class VoskBackend:
                     for word in result["result"]
                 ]
 
-            LOG.info("Vosk transcription: '%s'", text)
+            LOG.debug("Vosk transcription: '%s'", text)
 
             return TranscriptResult(
                 text=text,

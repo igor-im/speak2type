@@ -47,12 +47,21 @@ class ModelSpec:
 
 
 # Pinned model specifications for reproducibility and security
+#
+# SECURITY NOTE: Models MUST have pinned revisions and SHA256 hashes before
+# production deployment. Empty sha256 fields mean NO integrity verification.
+# To compute hashes:
+#   1. Download model files from HuggingFace
+#   2. Run: sha256sum model.onnx vocab.txt config.json | sort
+#   3. Concatenate hashes or hash the directory
+#   4. Pin the specific git commit hash as revision
+#
 PINNED_MODELS: dict[str, ModelSpec] = {
     "nvidia/parakeet-tdt-0.6b-v2": ModelSpec(
         id="nvidia/parakeet-tdt-0.6b-v2",
         name="Parakeet TDT 0.6B v2 (English)",
-        revision="main",  # TODO: Pin to specific commit
-        sha256="",  # TODO: Compute and pin SHA256
+        revision="main",  # SECURITY: Pin to specific commit before production
+        sha256="",  # SECURITY: Compute and pin SHA256 before production
         license="CC-BY-4.0",
         languages=["en"],
         size_mb=600,
@@ -61,8 +70,8 @@ PINNED_MODELS: dict[str, ModelSpec] = {
     "nvidia/parakeet-tdt-0.6b-v3-multilingual": ModelSpec(
         id="nvidia/parakeet-tdt-0.6b-v3-multilingual",
         name="Parakeet TDT 0.6B v3 (Multilingual)",
-        revision="main",  # TODO: Pin to specific commit
-        sha256="",  # TODO: Compute and pin SHA256
+        revision="main",  # SECURITY: Pin to specific commit before production
+        sha256="",  # SECURITY: Compute and pin SHA256 before production
         license="CC-BY-4.0",
         languages=["en", "es", "fr", "de", "it", "pt", "nl", "ja", "ko", "zh"],
         size_mb=650,
@@ -203,6 +212,11 @@ class ParakeetModelManager:
                     LOG.error("SHA256 verification failed for %s", model_id)
                     shutil.rmtree(model_path)
                     return None
+            else:
+                LOG.warning(
+                    "SECURITY: No SHA256 hash pinned for model %s. "
+                    "Model integrity not verified.", model_id
+                )
 
             LOG.info("Model installed: %s -> %s", model_id, model_path)
             return model_path

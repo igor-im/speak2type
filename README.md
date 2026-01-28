@@ -2,6 +2,9 @@
 
 Speech-to-text input method engine for Linux desktops (GNOME/IBus).
 
+| :exclamation:  This is less than version 0, use at your own risk!   |
+|----------------------------------------------|
+
 ## Features
 
 - **Push-to-talk dictation**: Hold Alt+Space to speak, release to transcribe
@@ -55,6 +58,10 @@ ruff check src/
 # Type checking
 mypy src/
 ```
+
+## Curent Issues
+- Mic symbol stuck as active in task bar (likely due to gstreamer being stuck in PLAYING)
+- Sometimes the engine crashes after switching input sources
 
 ## License
 

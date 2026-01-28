@@ -163,7 +163,7 @@ class TranscriptionWorker:
             options=job.options,
         )
 
-        LOG.info("Transcription result: '%s'", result.text)
+        LOG.debug("Transcription result: '%s'", result.text)
 
         # Schedule callback in main loop
         GLib.idle_add(self._deliver_result, result)

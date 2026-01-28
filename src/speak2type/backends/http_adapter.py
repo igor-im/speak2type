@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import BinaryIO
+from urllib.parse import urlparse
 
 from ..types import AudioSegment, TranscriptResult, Segment
 
@@ -73,6 +74,25 @@ class HttpBackend:
             timeout_s: Request timeout in seconds.
             model: Model name for OpenAI dialect.
         """
+        # Validate endpoint URL
+        if endpoint_url is not None:
+            parsed = urlparse(endpoint_url)
+            if parsed.scheme not in ("http", "https"):
+                raise ValueError(
+                    f"Invalid endpoint URL scheme: {parsed.scheme!r}. "
+                    "Must be 'http' or 'https'."
+                )
+            if not parsed.netloc:
+                raise ValueError(f"Invalid endpoint URL: missing host in {endpoint_url!r}")
+
+            # Security: require HTTPS when auth is provided (unless localhost)
+            is_localhost = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+            if auth_header and parsed.scheme != "https" and not is_localhost:
+                raise ValueError(
+                    "HTTPS required when using authentication with remote endpoints. "
+                    f"Got: {endpoint_url}"
+                )
+
         self._endpoint_url = endpoint_url
         self._dialect = HttpDialect(dialect) if isinstance(dialect, str) else dialect
         self._auth_header = auth_header

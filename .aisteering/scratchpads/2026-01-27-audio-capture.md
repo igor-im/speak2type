@@ -81,6 +81,40 @@ tail -f ~/.cache/speak2type/engine.log | grep -E "(PTT|Recording|Transcri)"
 
 ### Remaining Items
 - Install GSettings schema for persistent settings
+- Pin model SHA256 hashes before production deployment
+
+---
+
+## 2026-01-28 - Security Fixes
+
+### Issues Addressed (from security review)
+
+| Issue | Severity | Fix |
+|-------|----------|-----|
+| Transcripts logged at INFO | MEDIUM | Changed to DEBUG in all backends + worker |
+| HTTP URL not validated | MEDIUM | Added urlparse validation in http_adapter.py |
+| HTTPS not enforced with auth | MEDIUM | Raises ValueError if auth + non-https (except localhost) |
+| Model SHA256 unpinned | MEDIUM | Added security warnings, logging when unverified |
+| HTTP backend not registered | HIGH | Added registration in __init__.py |
+| Key events logged at INFO | MEDIUM | Changed to DEBUG |
+| Machine-specific launcher | LOW | Removed from git, added to .gitignore |
+
+### Files Modified
+
+- `src/speak2type/backends/__init__.py` - HTTP backend registration, improved import logging
+- `src/speak2type/backends/http_adapter.py` - URL validation, HTTPS enforcement
+- `src/speak2type/backends/parakeet_adapter.py` - Transcript logging → DEBUG
+- `src/speak2type/backends/vosk_adapter.py` - Transcript logging → DEBUG
+- `src/speak2type/backends/whisper_adapter.py` - Transcript logging → DEBUG
+- `src/speak2type/worker.py` - Transcript logging → DEBUG
+- `src/speak2type/engine.py` - Key event + commit logging → DEBUG, PTT release fix, settings null check
+- `src/speak2type/audio_capture.py` - Added PRIVACY NOTE documentation
+- `src/speak2type/model_managers/parakeet.py` - Security warnings for unpinned hashes
+- `.gitignore` - Added machine-specific launcher
+- `pyproject.toml` - Removed broken benchmark entry point
+
+### Status
+All fixes verified working. Engine starts, Alt+Space triggers recording, transcription works with v2 English-only model.
 
 ---
 
