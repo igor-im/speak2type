@@ -210,7 +210,10 @@ class AudioCapture:
             self._bus.add_signal_watch()
             self._bus.connect("message", self._on_bus_message)
 
-            # Start pipeline in PLAYING state - keep it running to avoid hangs
+            # PRIVACY NOTE: Pipeline stays in PLAYING state while engine is enabled.
+            # Reason: pulsesrc hangs on state changes (PAUSED/READY/NULL).
+            # Audio is only buffered when _is_recording=True; otherwise samples
+            # are pulled and discarded. See _on_new_sample() callback.
             ret = self._pipeline.set_state(Gst.State.PLAYING)
             if ret == Gst.StateChangeReturn.FAILURE:
                 LOG.error("Failed to start pipeline")

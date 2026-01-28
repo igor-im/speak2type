@@ -288,7 +288,7 @@ class Speak2TypeEngine(IBus.Engine):
         if result.text:
             self._transition_to(EngineState.COMMITTING)
             self.commit_text(IBus.Text.new_from_string(result.text))
-            LOG.info("Committed text: '%s'", result.text)
+            LOG.debug("Committed text: '%s'", result.text)
 
         self._transition_to(EngineState.IDLE)
 
@@ -334,8 +334,8 @@ class Speak2TypeEngine(IBus.Engine):
             True if the key event was handled.
         """
         is_release = bool(state & IBus.ModifierType.RELEASE_MASK)
-        LOG.info("KEY EVENT: keyval=%d (%s), keycode=%d, state=%d, release=%s",
-                 keyval, IBus.keyval_name(keyval), keycode, state, is_release)
+        LOG.debug("KEY EVENT: keyval=%d (%s), keycode=%d, state=%d, release=%s",
+                  keyval, IBus.keyval_name(keyval), keycode, state, is_release)
 
         # Check for push-to-talk hotkey
         relevant_mods = state & (

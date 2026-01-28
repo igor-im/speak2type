@@ -97,3 +97,14 @@ def register_default_backends(registry: BackendRegistry | None = None) -> None:
                 LOG.info("Parakeet available but no model loaded")
         except Exception as e:
             LOG.warning("Failed to initialize Parakeet: %s", e)
+
+    # Try to register HTTP backend
+    if HTTPX_AVAILABLE and HttpBackend is not None:
+        try:
+            backend = HttpBackend()
+            if backend.is_available:
+                registry.register(backend)
+            else:
+                LOG.info("HTTP backend available but not configured")
+        except Exception as e:
+            LOG.warning("Failed to initialize HTTP backend: %s", e)

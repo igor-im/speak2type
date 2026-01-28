@@ -65,8 +65,7 @@ Homepage = "https://github.com/speak2type/speak2type"
 Repository = "https://github.com/speak2type/speak2type"
 Issues = "https://github.com/speak2type/speak2type/issues"
 
-[project.scripts]
-speak2type-benchmark = "speak2type.scripts.benchmark:main"
+# Benchmark is a standalone script: python scripts/benchmark.py
 
 [tool.setuptools.packages.find]
 where = ["src"]

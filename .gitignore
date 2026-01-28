@@ -93,3 +93,6 @@ dmypy.json
 
 # Ruff
 .ruff_cache/
+
+# Generated machine-specific scripts (created by dev-install.sh)
+scripts/ibus-engine-speak2type
