@@ -133,7 +133,7 @@ install_ibus_component() {
 <component>
     <name>org.freedesktop.IBus.speak2type</name>
     <description>Speech To Text Engine</description>
-    <exec>${PROJECT_DIR}/scripts/ibus-engine-speak2type</exec>
+    <exec>${PROJECT_DIR}/scripts/ibus-engine-speak2type --ibus</exec>
     <version>0.1.0</version>
     <author>speak2type contributors</author>
     <license>GPL-3.0</license>

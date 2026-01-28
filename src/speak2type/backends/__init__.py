@@ -12,7 +12,7 @@ try:
 except ImportError:
     VoskBackend = None
     VOSK_AVAILABLE = False
-    LOG.debug("Vosk backend not available")
+    LOG.warning("Vosk backend not available", exc_info=True)
 
 # Try to import Whisper backend
 try:
@@ -20,7 +20,7 @@ try:
 except ImportError:
     WhisperBackend = None
     WHISPER_AVAILABLE = False
-    LOG.debug("Whisper backend not available")
+    LOG.warning("Whisper backend not available", exc_info=True)
 
 # Try to import Parakeet backend
 try:
@@ -28,7 +28,7 @@ try:
 except ImportError:
     ParakeetBackend = None
     PARAKEET_AVAILABLE = False
-    LOG.debug("Parakeet backend not available")
+    LOG.warning("Parakeet backend not available", exc_info=True)
 
 # Try to import HTTP backend
 try:
@@ -37,7 +37,7 @@ except ImportError:
     HttpBackend = None
     HttpDialect = None
     HTTPX_AVAILABLE = False
-    LOG.debug("HTTP backend not available")
+    LOG.warning("HTTP backend not available", exc_info=True)
 
 __all__ = [
     "BackendRegistry",

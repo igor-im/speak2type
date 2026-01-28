@@ -10,7 +10,7 @@ gi.require_version("IBus", "1.0")
 gi.require_version("GLib", "2.0")
 gi.require_version("Gio", "2.0")
 
-from gi.repository import IBus, GLib, Gio
+from gi.repository import IBus, GLib, Gio, GObject
 
 from .types import EngineState, RecordMode, AudioSource, TranscriptResult
 from .audio_capture import AudioCapture
@@ -54,17 +54,28 @@ class Speak2TypeEngine(IBus.Engine):
         # State machine
         self._state = EngineState.IDLE
         self._recording_disabled = False  # Privacy: disabled in password fields
+        self._ptt_active = False  # Tracks if PTT key is held (for release detection)
 
-        # Settings
-        self._settings = Gio.Settings.new("org.freedesktop.ibus.engine.stt")
+        # Settings (optional - schema may not be installed)
+        self._settings = None
+        schema_source = Gio.SettingsSchemaSource.get_default()
+        if schema_source and schema_source.lookup("org.freedesktop.ibus.engine.stt", True):
+            self._settings = Gio.Settings.new("org.freedesktop.ibus.engine.stt")
+            LOG.info("Loaded GSettings schema")
+        else:
+            LOG.warning("GSettings schema not installed, using defaults")
+
         self._record_mode = RecordMode.PUSH_TO_TALK
         self._ptt_keyval = DEFAULT_PTT_KEYVAL
         self._ptt_modifiers = DEFAULT_PTT_MODIFIERS
-        self._load_settings()
+        if self._settings:
+            self._load_settings()
 
         # Audio capture
-        audio_source_str = self._settings.get_string("audio-source")
-        audio_source = AudioSource(audio_source_str) if audio_source_str else AudioSource.AUTO
+        audio_source = AudioSource.AUTO
+        if self._settings:
+            audio_source_str = self._settings.get_string("audio-source")
+            audio_source = AudioSource(audio_source_str) if audio_source_str else AudioSource.AUTO
         self._audio_capture = AudioCapture(audio_source=audio_source)
 
         # Set up backend from registry
@@ -83,15 +94,17 @@ class Speak2TypeEngine(IBus.Engine):
         # Register default backends
         register_default_backends()
 
-        # Get configured backend from settings
-        backend_id = self._settings.get_string("backend") or "vosk"
+        # Get configured backend from settings (default to parakeet)
+        backend_id = "parakeet"
+        if self._settings:
+            backend_id = self._settings.get_string("backend") or "parakeet"
         registry = get_registry()
 
         # Try to set the configured backend
         if not registry.set_current(backend_id):
             LOG.warning("Configured backend '%s' not available, using fallback", backend_id)
-            # Try alternatives
-            for alt_id in ["vosk", "whisper", "placeholder"]:
+            # Try alternatives (parakeet preferred for performance)
+            for alt_id in ["parakeet", "vosk", "whisper", "placeholder"]:
                 if registry.set_current(alt_id):
                     break
 
@@ -201,8 +214,8 @@ class Speak2TypeEngine(IBus.Engine):
             LOG.info("Recording disabled (privacy mode)")
             return False
 
-        # Ensure audio capture is set up
-        if not self._audio_capture.is_recording:
+        # Ensure audio capture is set up (only once, not every recording)
+        if not self._audio_capture.is_setup:
             if not self._audio_capture.setup(on_error=self._on_audio_error):
                 LOG.error("Failed to set up audio capture")
                 return False
@@ -254,7 +267,9 @@ class Speak2TypeEngine(IBus.Engine):
 
         # Submit to worker
         if self._worker:
-            locale = self._settings.get_string("locale") or "en_US"
+            locale = "en_US"
+            if self._settings:
+                locale = self._settings.get_string("locale") or "en_US"
             self._worker.submit(segment, locale_hint=locale)
         else:
             LOG.warning("No worker available, using placeholder")
@@ -281,6 +296,7 @@ class Speak2TypeEngine(IBus.Engine):
         """Handle audio capture error."""
         LOG.error("Audio error: %s", error)
         self._transition_to(EngineState.IDLE)
+
 
     def _is_ptt_key(self, keyval: int, modifiers: int) -> bool:
         """Check if the key event matches the push-to-talk hotkey.
@@ -318,20 +334,38 @@ class Speak2TypeEngine(IBus.Engine):
             True if the key event was handled.
         """
         is_release = bool(state & IBus.ModifierType.RELEASE_MASK)
+        LOG.info("KEY EVENT: keyval=%d (%s), keycode=%d, state=%d, release=%s",
+                 keyval, IBus.keyval_name(keyval), keycode, state, is_release)
 
         # Check for push-to-talk hotkey
+        relevant_mods = state & (
+            IBus.ModifierType.SHIFT_MASK
+            | IBus.ModifierType.CONTROL_MASK
+            | IBus.ModifierType.MOD1_MASK  # Alt
+            | IBus.ModifierType.MOD4_MASK  # Super
+        )
+        LOG.debug("PTT check: keyval=%d (want %d), mods=%d (want %d), state=%s",
+                  keyval, self._ptt_keyval, relevant_mods, self._ptt_modifiers, self._state)
         if self._record_mode == RecordMode.PUSH_TO_TALK:
-            if self._is_ptt_key(keyval, state):
-                if is_release:
-                    # Key released - stop recording
-                    if self._state == EngineState.RECORDING:
-                        self._stop_recording()
-                        return True
-                else:
-                    # Key pressed - start recording
-                    if self._state == EngineState.IDLE:
-                        self._start_recording()
-                        return True
+            # Check for PTT activation (press with correct modifiers)
+            if not is_release and self._is_ptt_key(keyval, state):
+                # Key pressed - start recording or consume repeat
+                if self._state == EngineState.IDLE:
+                    self._ptt_active = True
+                    self._start_recording()
+                    LOG.debug("PTT activated")
+                # Always consume press (including repeats) to prevent spaces
+                return True
+
+            # Check for PTT release - only need keyval match (modifiers may differ)
+            # User often releases Alt before Space, so we can't require modifier match
+            if is_release and keyval == self._ptt_keyval and self._ptt_active:
+                LOG.debug("PTT released (keyval match, ptt_active=True)")
+                self._ptt_active = False
+                if self._state == EngineState.RECORDING:
+                    self._stop_recording()
+                # Consume release to prevent space from leaking
+                return True
 
         # Let other keys pass through
         return False
@@ -383,6 +417,9 @@ class Speak2TypeEngine(IBus.Engine):
         """Called when the engine is disabled."""
         LOG.info("Engine disabled")
 
+        # Reset PTT state
+        self._ptt_active = False
+
         # Stop any ongoing recording
         if self._state == EngineState.RECORDING:
             self._audio_capture.stop()
@@ -391,14 +428,33 @@ class Speak2TypeEngine(IBus.Engine):
 
     def do_focus_in(self) -> None:
         """Called when focus enters an input context."""
-        LOG.debug("Focus in")
+        LOG.info("FOCUS IN - IBus-aware app has focus")
         self.register_properties(self._prop_list)
         self._update_state_ui()
 
     def do_focus_out(self) -> None:
         """Called when focus leaves an input context."""
-        LOG.debug("Focus out")
+        LOG.info("FOCUS OUT - lost focus")
 
+        # Reset PTT state
+        self._ptt_active = False
+
+        # Stop recording on focus loss
+        if self._state == EngineState.RECORDING:
+            self._audio_capture.stop()
+            self._transition_to(EngineState.IDLE)
+
+    def do_focus_in_id(self, object_path: str, client: str) -> None:
+        """Called when focus enters with client info (Wayland)."""
+        LOG.info("FOCUS IN ID: path=%s, client=%s", object_path, client)
+        self.register_properties(self._prop_list)
+        self._update_state_ui()
+
+    def do_focus_out_id(self, object_path: str) -> None:
+        """Called when focus leaves with path info (Wayland)."""
+        LOG.info("FOCUS OUT ID: path=%s", object_path)
+        # Reset PTT state
+        self._ptt_active = False
         # Stop recording on focus loss
         if self._state == EngineState.RECORDING:
             self._audio_capture.stop()
@@ -406,7 +462,10 @@ class Speak2TypeEngine(IBus.Engine):
 
     def do_reset(self) -> None:
         """Called to reset the engine state."""
-        LOG.debug("Reset")
+        LOG.info("RESET")
+
+        # Reset PTT state
+        self._ptt_active = False
 
         # Stop recording on reset
         if self._state == EngineState.RECORDING:
@@ -453,13 +512,14 @@ class Speak2TypeEngineFactory(IBus.Factory):
         Args:
             bus: IBus bus connection.
         """
-        super().__init__(
-            connection=bus.get_connection(),
-            object_path=IBus.PATH_FACTORY,
-        )
         self._bus = bus
-        self._engine_count = 0
-        LOG.info("Engine factory created")
+        self._current_engine = None
+        # Match upstream argument order: object_path first, then connection
+        super().__init__(
+            object_path=IBus.PATH_FACTORY,
+            connection=bus.get_connection(),
+        )
+        LOG.info("Engine factory created at %s", IBus.PATH_FACTORY)
 
     def do_create_engine(self, engine_name: str) -> IBus.Engine | None:
         """Create a new engine instance.
@@ -470,26 +530,35 @@ class Speak2TypeEngineFactory(IBus.Factory):
         Returns:
             New engine instance or None.
         """
+        LOG.info("Creating engine for: %s", engine_name)
         if engine_name != "speak2type":
-            LOG.warning("Unknown engine name: %s", engine_name)
-            return None
+            LOG.warning("Unknown engine name: %s, delegating to parent", engine_name)
+            return super().do_create_engine(engine_name)
 
-        self._engine_count += 1
-        object_path = f"{IBus.PATH_ENGINE}/speak2type/{self._engine_count}"
-
-        LOG.info("Creating engine: %s", object_path)
-        return Speak2TypeEngine(self._bus, object_path)
+        engine = Speak2TypeEngine(self._bus, "/org/freedesktop/IBus/speak2type")
+        self._current_engine = engine
+        LOG.info("Created engine at /org/freedesktop/IBus/speak2type")
+        return engine
 
 
 def main() -> int:
     """Main entry point for the IBus engine."""
-    # Set up logging
+    # Set up logging to file for debugging
+    log_file = os.path.expanduser("~/.cache/speak2type/engine.log")
+    os.makedirs(os.path.dirname(log_file), exist_ok=True)
     logging.basicConfig(
         level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(),
+        ],
     )
 
     LOG.info("speak2type engine starting")
+
+    # Check if running in IBus mode (started by IBus daemon)
+    ibus_mode = "--ibus" in sys.argv
 
     # Initialize IBus
     IBus.init()
@@ -500,36 +569,42 @@ def main() -> int:
         LOG.error("Cannot connect to IBus")
         return 1
 
-    # Request name
-    bus.request_name("org.freedesktop.IBus.speak2type", 0)
-
-    # Create factory
+    # Create factory FIRST - must be done before request_name
     factory = Speak2TypeEngineFactory(bus)
+    # Register the engine type with the factory
+    factory.add_engine("speak2type", GObject.type_from_name("Speak2TypeEngine"))
+    LOG.info("Factory and engine type registered")
 
-    # Create component
-    component = IBus.Component(
-        name="org.freedesktop.IBus.speak2type",
-        description="Speech To Text Engine",
-        version="0.1.0",
-        license="GPL-3.0",
-        author="speak2type contributors",
-        homepage="https://github.com/speak2type/speak2type",
-        textdomain="speak2type",
-    )
-    component.add_engine(
-        IBus.EngineDesc(
-            name="speak2type",
-            longname="Speech To Text",
-            description="Speech to text input method",
-            language="en",
+    # Different initialization based on how we were started
+    if ibus_mode:
+        # Started by IBus - just request name, IBus already knows about component
+        LOG.info("Running in IBus mode, requesting name")
+        bus.request_name("org.freedesktop.IBus.speak2type", 0)
+    else:
+        # Standalone mode - register component so IBus knows about us
+        LOG.info("Running in standalone mode, registering component")
+        component = IBus.Component(
+            name="org.freedesktop.IBus.speak2type",
+            description="Speech To Text Engine",
+            version="0.1.0",
             license="GPL-3.0",
             author="speak2type contributors",
-            icon="audio-input-microphone",
-            layout="us",
+            homepage="https://github.com/speak2type/speak2type",
+            textdomain="speak2type",
         )
-    )
-
-    bus.register_component(component)
+        component.add_engine(
+            IBus.EngineDesc(
+                name="speak2type",
+                longname="Speech To Text",
+                description="Speech to text input method",
+                language="en",
+                license="GPL-3.0",
+                author="speak2type contributors",
+                icon="audio-input-microphone",
+                layout="us",
+            )
+        )
+        bus.register_component(component)
 
     # Start main loop
     LOG.info("Entering main loop")

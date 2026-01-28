@@ -12,20 +12,17 @@ Parakeet models are known for:
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
 import numpy as np
 
 from ..types import AudioSegment, TranscriptResult, Segment
 
-if TYPE_CHECKING:
-    from onnx_asr import ONNXModel
-
 LOG = logging.getLogger(__name__)
 
 # Check if onnx-asr is available
 try:
-    from onnx_asr import ONNXModel
+    import onnx_asr
     import onnxruntime
     PARAKEET_AVAILABLE = True
 except ImportError:
@@ -33,17 +30,12 @@ except ImportError:
     LOG.warning("onnx-asr not available. Install with: pip install onnx-asr")
 
 
-def get_xdg_data_home() -> Path:
-    """Get XDG_DATA_HOME directory."""
-    xdg = os.environ.get("XDG_DATA_HOME")
-    if xdg:
-        return Path(xdg)
-    return Path.home() / ".local" / "share"
-
-
-def get_model_dir() -> Path:
-    """Get the default model directory for Parakeet."""
-    return get_xdg_data_home() / "speak2type" / "models" / "parakeet"
+# Model name mapping for onnx-asr
+MODEL_NAMES = {
+    "parakeet-v2": "nemo-parakeet-tdt-0.6b-v2",
+    "parakeet-v3": "nemo-parakeet-tdt-0.6b-v3",  # multilingual
+    "whisper-base": "whisper-base",
+}
 
 
 class ParakeetBackend:
@@ -53,32 +45,27 @@ class ParakeetBackend:
     transcription with CPU or CUDA acceleration.
 
     Supported models:
-    - nvidia/parakeet-tdt-0.6b-v2 (English)
-    - nvidia/parakeet-tdt-0.6b-v3-multilingual (Multilingual)
+    - nemo-parakeet-tdt-0.6b-v2 (English)
+    - nemo-parakeet-tdt-0.6b-v3 (Multilingual)
     """
 
-    # Default model identifiers
-    DEFAULT_MODEL = "nvidia/parakeet-tdt-0.6b-v2"
-    MULTILINGUAL_MODEL = "nvidia/parakeet-tdt-0.6b-v3-multilingual"
+    DEFAULT_MODEL = "nemo-parakeet-tdt-0.6b-v2"  # English-only (v3 is multilingual)
 
     def __init__(
         self,
         model_name: str | None = None,
-        model_path: str | Path | None = None,
         use_cuda: bool = False,
         num_threads: int = 4,
     ) -> None:
         """Initialize the Parakeet backend.
 
         Args:
-            model_name: HuggingFace model name (e.g., "nvidia/parakeet-tdt-0.6b-v2").
-            model_path: Local path to ONNX model directory.
+            model_name: Model name for onnx-asr (e.g., "nemo-parakeet-tdt-0.6b-v2").
             use_cuda: Whether to use CUDA for inference.
             num_threads: Number of threads for CPU inference.
         """
-        self._model: "ONNXModel | None" = None
+        self._model: Any = None
         self._model_name = model_name or self.DEFAULT_MODEL
-        self._model_path: Path | None = None
         self._use_cuda = use_cuda
         self._num_threads = num_threads
 
@@ -86,10 +73,7 @@ class ParakeetBackend:
             LOG.error("Parakeet not available")
             return
 
-        if model_path:
-            self._load_from_path(Path(model_path))
-        else:
-            self._load_from_name(self._model_name)
+        self._load_model()
 
     @property
     def id(self) -> str:
@@ -97,27 +81,16 @@ class ParakeetBackend:
 
     @property
     def name(self) -> str:
-        return "Parakeet TDT (ONNX)"
+        return f"Parakeet TDT ({self._model_name})"
 
     @property
     def is_available(self) -> bool:
         """Check if Parakeet is available and model is loaded."""
         return PARAKEET_AVAILABLE and self._model is not None
 
-    def _get_session_options(self) -> "onnxruntime.SessionOptions":
-        """Get ONNX Runtime session options."""
-        opts = onnxruntime.SessionOptions()
-        opts.intra_op_num_threads = self._num_threads
-        opts.inter_op_num_threads = self._num_threads
-        opts.graph_optimization_level = (
-            onnxruntime.GraphOptimizationLevel.ORT_ENABLE_ALL
-        )
-        return opts
-
     def _get_providers(self) -> list[str]:
         """Get execution providers based on configuration."""
         if self._use_cuda:
-            # Check if CUDA is available
             providers = onnxruntime.get_available_providers()
             if "CUDAExecutionProvider" in providers:
                 return ["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -125,11 +98,8 @@ class ParakeetBackend:
 
         return ["CPUExecutionProvider"]
 
-    def _load_from_name(self, model_name: str) -> bool:
-        """Load model from HuggingFace model name.
-
-        Args:
-            model_name: HuggingFace model name.
+    def _load_model(self) -> bool:
+        """Load model using onnx-asr.
 
         Returns:
             True if model loaded successfully.
@@ -138,49 +108,19 @@ class ParakeetBackend:
             return False
 
         try:
-            LOG.info("Loading Parakeet model: %s", model_name)
+            LOG.info("Loading Parakeet model: %s", self._model_name)
 
-            # onnx-asr will download from HuggingFace if not cached
-            self._model = ONNXModel.from_pretrained(
-                model_name,
-                session_options=self._get_session_options(),
+            # Create session options
+            sess_options = onnxruntime.SessionOptions()
+            sess_options.intra_op_num_threads = self._num_threads
+            sess_options.inter_op_num_threads = self._num_threads
+
+            # Load using new onnx-asr API
+            self._model = onnx_asr.load_model(
+                self._model_name,
+                sess_options=sess_options,
                 providers=self._get_providers(),
             )
-            self._model_name = model_name
-
-            LOG.info("Parakeet model loaded successfully")
-            return True
-
-        except Exception as e:
-            LOG.error("Failed to load Parakeet model: %s", e)
-            self._model = None
-            return False
-
-    def _load_from_path(self, model_path: Path) -> bool:
-        """Load model from local path.
-
-        Args:
-            model_path: Path to model directory.
-
-        Returns:
-            True if model loaded successfully.
-        """
-        if not PARAKEET_AVAILABLE:
-            return False
-
-        if not model_path.exists():
-            LOG.error("Model path does not exist: %s", model_path)
-            return False
-
-        try:
-            LOG.info("Loading Parakeet model from: %s", model_path)
-
-            self._model = ONNXModel(
-                str(model_path),
-                session_options=self._get_session_options(),
-                providers=self._get_providers(),
-            )
-            self._model_path = model_path
 
             LOG.info("Parakeet model loaded successfully")
             return True
@@ -223,43 +163,14 @@ class ParakeetBackend:
                 len(audio_float) / segment.format.sample_rate,
             )
 
-            # Transcribe using onnx-asr
-            result = self._model.transcribe(
-                audio_float,
-                sample_rate=segment.format.sample_rate,
-            )
-
-            # Extract text and segments
-            text = ""
-            segments_list = []
-
-            if isinstance(result, str):
-                # Simple string result
-                text = result.strip()
-            elif hasattr(result, "text"):
-                # Result object with text attribute
-                text = result.text.strip() if result.text else ""
-
-                # Extract segments if available
-                if hasattr(result, "segments") and result.segments:
-                    for seg in result.segments:
-                        segment_obj = Segment(
-                            text=getattr(seg, "text", "").strip(),
-                            start_ms=int(getattr(seg, "start", 0) * 1000),
-                            end_ms=int(getattr(seg, "end", 0) * 1000),
-                            confidence=getattr(seg, "confidence", None),
-                        )
-                        if segment_obj.text:
-                            segments_list.append(segment_obj)
-            elif isinstance(result, dict):
-                # Dictionary result
-                text = result.get("text", "").strip()
+            # Transcribe using onnx-asr recognize() method
+            text = self._model.recognize(audio_float, sample_rate=segment.format.sample_rate)
+            text = text.strip() if text else ""
 
             LOG.info("Parakeet transcription: '%s'", text)
 
             return TranscriptResult(
                 text=text,
-                segments=segments_list if segments_list else None,
                 language=locale_hint[:2] if locale_hint else None,
             )
 
@@ -270,50 +181,14 @@ class ParakeetBackend:
                 confidence=0.0,
             )
 
-    def set_model(self, model_name: str | None = None, model_path: Path | None = None) -> bool:
+    def set_model(self, model_name: str) -> bool:
         """Set a new model.
 
         Args:
-            model_name: HuggingFace model name.
-            model_path: Local path to model directory.
+            model_name: onnx-asr model name.
 
         Returns:
             True if model loaded successfully.
         """
-        if model_path:
-            return self._load_from_path(model_path)
-        elif model_name:
-            return self._load_from_name(model_name)
-        return False
-
-    def set_use_cuda(self, use_cuda: bool) -> None:
-        """Set whether to use CUDA.
-
-        Args:
-            use_cuda: Whether to use CUDA for inference.
-
-        Note: Requires reloading the model to take effect.
-        """
-        if self._use_cuda != use_cuda:
-            self._use_cuda = use_cuda
-            # Reload model with new providers
-            if self._model_path:
-                self._load_from_path(self._model_path)
-            elif self._model_name:
-                self._load_from_name(self._model_name)
-
-    def set_num_threads(self, num_threads: int) -> None:
-        """Set number of threads for CPU inference.
-
-        Args:
-            num_threads: Number of threads.
-
-        Note: Requires reloading the model to take effect.
-        """
-        if self._num_threads != num_threads:
-            self._num_threads = num_threads
-            # Reload model with new thread count
-            if self._model_path:
-                self._load_from_path(self._model_path)
-            elif self._model_name:
-                self._load_from_name(self._model_name)
+        self._model_name = model_name
+        return self._load_model()

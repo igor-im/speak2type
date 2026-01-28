@@ -69,8 +69,8 @@ Issues = "https://github.com/speak2type/speak2type/issues"
 speak2type-benchmark = "speak2type.scripts.benchmark:main"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+where = ["src"]
+include = ["speak2type*"]
 
 [tool.ruff]
 target-version = "py311"

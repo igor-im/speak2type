@@ -6,9 +6,10 @@ from typing import Callable
 import gi
 
 gi.require_version("Gst", "1.0")
+gi.require_version("GstApp", "1.0")
 gi.require_version("GLib", "2.0")
 
-from gi.repository import Gst, GLib
+from gi.repository import Gst, GstApp, GLib
 
 from .types import AudioFormat, AudioSegment, AudioSource
 
@@ -27,16 +28,17 @@ def _check_element_available(element_name: str) -> bool:
 def _get_audio_source_element() -> str:
     """Determine the best available audio source element.
 
-    Returns pipewiresrc if available, otherwise pulsesrc.
+    Prefers pulsesrc as pipewiresrc has permission issues on some systems.
     """
-    if _check_element_available("pipewiresrc"):
-        LOG.info("Using pipewiresrc (native PipeWire)")
-        return "pipewiresrc"
-    elif _check_element_available("pulsesrc"):
+    # Prefer pulsesrc - it works reliably via pipewire-pulse
+    if _check_element_available("pulsesrc"):
         LOG.info("Using pulsesrc (PulseAudio/PipeWire-pulse)")
         return "pulsesrc"
+    elif _check_element_available("pipewiresrc"):
+        LOG.info("Using pipewiresrc (native PipeWire)")
+        return "pipewiresrc"
     else:
-        LOG.error("No audio source available (pipewiresrc or pulsesrc)")
+        LOG.error("No audio source available (pulsesrc or pipewiresrc)")
         raise RuntimeError("No audio source element available")
 
 
@@ -68,7 +70,7 @@ class AudioCapture:
     def __init__(
         self,
         audio_source: AudioSource = AudioSource.AUTO,
-        use_noise_suppression: bool = True,
+        use_noise_suppression: bool = False,  # Disabled for debugging
     ) -> None:
         """Initialize audio capture.
 
@@ -99,6 +101,11 @@ class AudioCapture:
         """Return whether audio capture is active."""
         return self._is_recording
 
+    @property
+    def is_setup(self) -> bool:
+        """Return whether the pipeline is set up."""
+        return self._pipeline is not None
+
     def _get_source_element(self) -> str:
         """Get the audio source element name based on preference."""
         if self._audio_source == AudioSource.PIPEWIRE:
@@ -128,7 +135,11 @@ class AudioCapture:
             return self._PIPELINE_TEMPLATE.format(source=source)
 
     def _on_new_sample(self, appsink: Gst.Element) -> Gst.FlowReturn:
-        """Handle new audio sample from appsink."""
+        """Handle new audio sample from appsink (signal-based).
+
+        IMPORTANT: Always pull samples to prevent pipeline backpressure.
+        Only buffer them when actually recording.
+        """
         sample = appsink.emit("pull-sample")
         if sample is None:
             return Gst.FlowReturn.OK
@@ -138,10 +149,11 @@ class AudioCapture:
         if not success:
             return Gst.FlowReturn.OK
 
-        # Append to buffer
-        self._buffer.extend(map_info.data)
-        buf.unmap(map_info)
+        # Always pull and unmap, but only buffer when recording
+        if self._is_recording:
+            self._buffer.extend(map_info.data)
 
+        buf.unmap(map_info)
         return Gst.FlowReturn.OK
 
     def _on_bus_message(self, bus: Gst.Bus, message: Gst.Message) -> bool:
@@ -165,17 +177,12 @@ class AudioCapture:
 
         return True
 
-    def setup(self, on_error: Callable[[str], None] | None = None) -> bool:
-        """Set up the GStreamer pipeline.
-
-        Args:
-            on_error: Callback for error notifications.
+    def _create_pipeline(self) -> bool:
+        """Create and configure the GStreamer pipeline.
 
         Returns:
-            True if setup succeeded.
+            True if pipeline was created successfully.
         """
-        self._on_error = on_error
-
         try:
             pipeline_desc = self._build_pipeline()
             LOG.info("Creating pipeline: %s", pipeline_desc)
@@ -190,7 +197,12 @@ class AudioCapture:
                 LOG.error("Failed to get appsink element")
                 return False
 
-            # Connect to new-sample signal
+            # Configure appsink for callback-based sample retrieval
+            # Always drain (via callback) to prevent pipeline backpressure
+            self._appsink.set_property("emit-signals", True)
+            self._appsink.set_property("sync", False)
+            self._appsink.set_property("drop", True)  # Drop old buffers if we fall behind
+            self._appsink.set_property("max-buffers", 5)  # Small queue
             self._appsink.connect("new-sample", self._on_new_sample)
 
             # Set up bus for messages
@@ -198,18 +210,30 @@ class AudioCapture:
             self._bus.add_signal_watch()
             self._bus.connect("message", self._on_bus_message)
 
-            # Move to READY state
-            ret = self._pipeline.set_state(Gst.State.READY)
+            # Start pipeline in PLAYING state - keep it running to avoid hangs
+            ret = self._pipeline.set_state(Gst.State.PLAYING)
             if ret == Gst.StateChangeReturn.FAILURE:
-                LOG.error("Failed to set pipeline to READY state")
+                LOG.error("Failed to start pipeline")
                 return False
 
-            LOG.info("Audio capture pipeline ready")
+            LOG.info("Audio capture pipeline ready and running")
             return True
 
         except Exception as e:
-            LOG.exception("Failed to set up audio capture: %s", e)
+            LOG.exception("Failed to create pipeline: %s", e)
             return False
+
+    def setup(self, on_error: Callable[[str], None] | None = None) -> bool:
+        """Set up the GStreamer pipeline.
+
+        Args:
+            on_error: Callback for error notifications.
+
+        Returns:
+            True if setup succeeded.
+        """
+        self._on_error = on_error
+        return self._create_pipeline()
 
     def start(self) -> bool:
         """Start recording audio.
@@ -225,10 +249,10 @@ class AudioCapture:
             LOG.warning("Already recording")
             return True
 
-        # Clear buffer
+        # Clear buffer - stale samples are continuously discarded by the callback
         self._buffer.clear()
 
-        # Start pipeline
+        # Pipeline should already be PLAYING from setup, but ensure it
         ret = self._pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
             LOG.error("Failed to start pipeline")
@@ -252,13 +276,9 @@ class AudioCapture:
             LOG.warning("Not recording")
             return None
 
-        # Stop pipeline
-        self._pipeline.set_state(Gst.State.PAUSED)
         self._is_recording = False
-
-        # Flush pipeline
-        self._pipeline.send_event(Gst.Event.new_flush_start())
-        self._pipeline.send_event(Gst.Event.new_flush_stop(True))
+        # Pipeline stays PLAYING - callback continues to drain samples
+        # but discards them since _is_recording is False
 
         # Get captured audio
         if len(self._buffer) == 0:
