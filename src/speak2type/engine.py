@@ -78,6 +78,9 @@ class Speak2TypeEngine(IBus.Engine):
             audio_source = AudioSource(audio_source_str) if audio_source_str else AudioSource.AUTO
         self._audio_capture = AudioCapture(audio_source=audio_source)
 
+        # Initialize worker to None (set in _setup_backend)
+        self._worker = None
+
         # Set up backend from registry
         self._setup_backend()
 
