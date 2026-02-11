@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<component>
+    <name>org.freedesktop.IBus.speak2type</name>
+    <description>Speech To Text Engine</description>
+    <exec>/usr/libexec/ibus-engine-speak2type --ibus</exec>
+    <version>0.1.0</version>
+    <author>speak2type contributors</author>
+    <license>GPL-3.0</license>
+    <homepage>https://github.com/speak2type/speak2type</homepage>
+    <textdomain>speak2type</textdomain>
+    <engines>
+        <engine>
+            <name>speak2type</name>
+            <language>en</language>
+            <license>GPL-3.0</license>
+            <author>speak2type contributors</author>
+            <icon>audio-input-microphone</icon>
+            <layout>us</layout>
+            <longname>Speech To Text</longname>
+            <description>Speech To Text input method</description>
+            <setup>/usr/libexec/ibus-setup-speak2type</setup>
+            <rank>0</rank>
+        </engine>
+    </engines>
+</component>

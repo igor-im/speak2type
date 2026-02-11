@@ -14,20 +14,20 @@ import os
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
 from ..types import AudioSegment, TranscriptResult, Segment
 
 LOG = logging.getLogger(__name__)
 
-# Check if onnx-asr is available
+# Check if onnx-asr and its dependencies are available
 try:
+    import numpy as np
     import onnx_asr
     import onnxruntime
     PARAKEET_AVAILABLE = True
 except ImportError:
+    np = None  # type: ignore[assignment]
     PARAKEET_AVAILABLE = False
-    LOG.warning("onnx-asr not available. Install with: pip install onnx-asr")
+    LOG.warning("Parakeet dependencies not available. Install with: pip install onnx-asr numpy onnxruntime")
 
 
 # Model name mapping for onnx-asr
@@ -98,6 +98,12 @@ class ParakeetBackend:
 
         return ["CPUExecutionProvider"]
 
+    @staticmethod
+    def _get_model_dir() -> Path:
+        """Return the local directory for storing model files."""
+        xdg_data = os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local" / "share"))
+        return Path(xdg_data) / "speak2type" / "models"
+
     def _load_model(self) -> bool:
         """Load model using onnx-asr.
 
@@ -110,6 +116,11 @@ class ParakeetBackend:
         try:
             LOG.info("Loading Parakeet model: %s", self._model_name)
 
+            # Use a flat local directory to avoid HuggingFace symlink cache issues
+            # with onnxruntime's external data path validation.
+            # Don't create the directory — onnx-asr skips download if it exists.
+            model_dir = self._get_model_dir() / self._model_name
+
             # Create session options
             sess_options = onnxruntime.SessionOptions()
             sess_options.intra_op_num_threads = self._num_threads
@@ -118,6 +129,7 @@ class ParakeetBackend:
             # Load using new onnx-asr API
             self._model = onnx_asr.load_model(
                 self._model_name,
+                path=model_dir,
                 sess_options=sess_options,
                 providers=self._get_providers(),
             )
@@ -177,8 +189,9 @@ class ParakeetBackend:
         except Exception as e:
             LOG.exception("Parakeet transcription error: %s", e)
             return TranscriptResult(
-                text=f"[Transcription error: {e}]",
+                text="",
                 confidence=0.0,
+                error=f"Parakeet transcription error: {e}",
             )
 
     def set_model(self, model_name: str) -> bool:

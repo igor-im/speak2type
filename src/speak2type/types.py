@@ -81,6 +81,7 @@ class TranscriptResult:
     language: str | None = None
     confidence: float | None = None
     is_partial: bool = False
+    error: str | None = None
 
 
 class Backend(Protocol):

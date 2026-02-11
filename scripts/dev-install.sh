@@ -180,7 +180,7 @@ EOF
 # speak2type setup launcher
 cd "${PROJECT_DIR}"
 source .venv/bin/activate
-exec python -m speak2type.setup "\$@"
+exec python -m speak2type.preferences "\$@"
 EOF
 
     chmod +x "$setup_script"

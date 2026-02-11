@@ -1,0 +1,23 @@
+#!/usr/bin/make -f
+
+export PYBUILD_NAME = speak2type
+export PYBUILD_TEST_ARGS = -q tests
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_test:
+	dh_auto_test -- --test-pytest
+
+override_dh_auto_install:
+	dh_auto_install
+	install -D -m 0755 debian/ibus-engine-speak2type debian/speak2type/usr/libexec/ibus-engine-speak2type
+	install -D -m 0755 debian/ibus-setup-speak2type debian/speak2type/usr/libexec/ibus-setup-speak2type
+	install -D -m 0644 debian/ibus-setup-speak2type.desktop debian/speak2type/usr/share/applications/ibus-setup-speak2type.desktop
+	install -D -m 0644 debian/speak2type.xml debian/speak2type/usr/share/ibus/component/speak2type.xml
+	install -D -m 0644 data/org.freedesktop.ibus.engine.stt.gschema.xml.in \
+		debian/speak2type/usr/share/glib-2.0/schemas/org.freedesktop.ibus.engine.stt.gschema.xml
+	install -d debian/speak2type/usr/share/speak2type/formatting
+	install -m 0644 data/formatting/*.json debian/speak2type/usr/share/speak2type/formatting/
+	install -d debian/speak2type/usr/share/speak2type/numbers
+	install -m 0644 data/numbers/*.properties debian/speak2type/usr/share/speak2type/numbers/

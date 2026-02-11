@@ -1,0 +1,9 @@
+speak2type (0.1.0-1) unstable; urgency=medium
+
+  * Add initial Debian packaging scaffold.
+  * Package Python module plus IBus component and GSettings schema.
+  * Fix Parakeet model manager typing for Python 3.13 compatibility.
+  * Run package tests with pytest and add python3-pytest build dependency.
+  * Add regression tests for model manager imports and defaults.
+
+ -- speak2type contributors <maintainers@speak2type.invalid>  Sat, 07 Feb 2026 13:00:00 +0000
