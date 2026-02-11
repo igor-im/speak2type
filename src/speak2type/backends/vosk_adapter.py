@@ -194,8 +194,9 @@ class VoskBackend:
         except Exception as e:
             LOG.exception("Vosk transcription error: %s", e)
             return TranscriptResult(
-                text=f"[Transcription error: {e}]",
+                text="",
                 confidence=0.0,
+                error=f"Vosk transcription error: {e}",
             )
 
     def set_model(self, model_path: str | Path) -> bool:

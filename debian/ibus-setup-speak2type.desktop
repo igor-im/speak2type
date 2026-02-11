@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=speak2type Preferences
+Comment=Configure speech-to-text engine and backends
+Exec=/usr/libexec/ibus-setup-speak2type
+Icon=audio-input-microphone
+NoDisplay=true
+Type=Application
+StartupNotify=true

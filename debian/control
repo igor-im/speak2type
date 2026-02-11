@@ -1,0 +1,39 @@
+Source: speak2type
+Section: utils
+Priority: optional
+Maintainer: speak2type contributors <maintainers@speak2type.invalid>
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-sequence-python3,
+ pybuild-plugin-pyproject,
+ python3-all,
+ python3-build,
+ python3-pytest,
+ python3-setuptools,
+ python3-wheel
+Standards-Version: 4.7.0
+Rules-Requires-Root: no
+Homepage: https://github.com/speak2type/speak2type
+
+Package: speak2type
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ ibus,
+ python3-gi,
+ python3-pip,
+ gir1.2-ibus-1.0,
+ gir1.2-glib-2.0,
+ gir1.2-gstreamer-1.0,
+ gir1.2-gst-plugins-base-1.0,
+ gir1.2-gtk-4.0,
+ gir1.2-adw-1,
+ gstreamer1.0-plugins-base,
+ gstreamer1.0-plugins-good,
+ gstreamer1.0-pipewire | gstreamer1.0-pulseaudio,
+ wl-clipboard | xclip
+Description: Speech-to-text input method engine for IBus
+ speak2type is a Linux desktop speech-to-text engine that integrates with IBus.
+ It provides push-to-talk dictation for any IBus-aware application and supports
+ pluggable recognition backends.

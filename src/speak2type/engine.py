@@ -2,6 +2,8 @@
 
 import logging
 import os
+import shutil
+import subprocess
 import sys
 
 import gi
@@ -16,12 +18,62 @@ from .types import EngineState, RecordMode, AudioSource, TranscriptResult
 from .audio_capture import AudioCapture
 from .worker import TranscriptionWorker
 from .backends import get_registry, register_default_backends
+from .global_hotkey import GlobalHotkeyListener
 
 LOG = logging.getLogger(__name__)
 
 # Default push-to-talk hotkey: Alt+Space
 DEFAULT_PTT_KEYVAL = IBus.KEY_space
 DEFAULT_PTT_MODIFIERS = IBus.ModifierType.MOD1_MASK  # Alt key
+
+# Mapping from GTK accelerator modifier names to IBus modifier masks
+_MODIFIER_MAP = {
+    "alt": IBus.ModifierType.MOD1_MASK,
+    "mod1": IBus.ModifierType.MOD1_MASK,
+    "ctrl": IBus.ModifierType.CONTROL_MASK,
+    "control": IBus.ModifierType.CONTROL_MASK,
+    "shift": IBus.ModifierType.SHIFT_MASK,
+    "super": IBus.ModifierType.MOD4_MASK,
+    "mod4": IBus.ModifierType.MOD4_MASK,
+}
+
+
+def parse_accelerator(accel: str) -> tuple[int, int]:
+    """Parse a GTK accelerator string into (keyval, modifiers).
+
+    Examples: '<Alt>space', '<Ctrl><Shift>r', '<Super>d'
+
+    Returns:
+        Tuple of (IBus keyval, IBus modifier mask).
+        Falls back to (DEFAULT_PTT_KEYVAL, DEFAULT_PTT_MODIFIERS) on parse error.
+    """
+    modifiers = 0
+    remaining = accel.strip()
+
+    # Extract <Modifier> tokens
+    while remaining.startswith("<"):
+        end = remaining.find(">")
+        if end == -1:
+            break
+        mod_name = remaining[1:end].lower()
+        if mod_name in _MODIFIER_MAP:
+            modifiers |= _MODIFIER_MAP[mod_name]
+        else:
+            LOG.warning("Unknown modifier in accelerator '%s': %s", accel, mod_name)
+        remaining = remaining[end + 1:]
+
+    # Remaining is the key name
+    key_name = remaining.strip()
+    if not key_name:
+        LOG.warning("No key name in accelerator '%s'", accel)
+        return DEFAULT_PTT_KEYVAL, DEFAULT_PTT_MODIFIERS
+
+    keyval = IBus.keyval_from_name(key_name)
+    if keyval == 0:
+        LOG.warning("Unknown key name in accelerator '%s': %s", accel, key_name)
+        return DEFAULT_PTT_KEYVAL, DEFAULT_PTT_MODIFIERS
+
+    return keyval, modifiers
 
 
 class Speak2TypeEngine(IBus.Engine):
@@ -55,6 +107,8 @@ class Speak2TypeEngine(IBus.Engine):
         self._state = EngineState.IDLE
         self._recording_disabled = False  # Privacy: disabled in password fields
         self._ptt_active = False  # Tracks if PTT key is held (for release detection)
+        self._has_real_focus = False  # True when focused on an IBus-aware input context
+        self._ptt_source: str | None = None  # 'ibus' or 'global' when PTT is active
 
         # Settings (optional - schema may not be installed)
         self._settings = None
@@ -84,6 +138,17 @@ class Speak2TypeEngine(IBus.Engine):
         # Set up backend from registry
         self._setup_backend()
 
+        # Global hotkey listener (XDG Desktop Portal)
+        self._global_hotkey = GlobalHotkeyListener(
+            on_press=self._on_global_ptt_press,
+            on_release=self._on_global_ptt_release,
+            accelerator=self._get_accelerator_string(),
+        )
+
+        # Listen for hotkey setting changes
+        if self._settings:
+            self._settings.connect("changed::ptt-hotkey", self._on_hotkey_changed)
+
         # Properties for IBus panel
         self._prop_list = self._create_properties()
 
@@ -93,7 +158,15 @@ class Speak2TypeEngine(IBus.Engine):
         LOG.info("Speak2TypeEngine created")
 
     def _setup_backend(self) -> None:
-        """Set up the speech recognition backend and worker thread."""
+        """Set up the speech recognition backend and worker thread.
+
+        If no backend is available (e.g. fresh install before the user
+        configures one via preferences), the engine starts without a
+        backend.  Dictation attempts will show a guidance message instead
+        of silently producing placeholder text.
+
+        See .aisteering/policy-exceptions.md — ENGINE_NO_BACKEND.
+        """
         # Register default backends
         register_default_backends()
 
@@ -103,16 +176,24 @@ class Speak2TypeEngine(IBus.Engine):
             backend_id = self._settings.get_string("backend") or "parakeet"
         registry = get_registry()
 
-        # Try to set the configured backend
+        # Try to activate the configured backend
         if not registry.set_current(backend_id):
-            LOG.warning("Configured backend '%s' not available, using fallback", backend_id)
-            # Try alternatives (parakeet preferred for performance)
-            for alt_id in ["parakeet", "vosk", "whisper", "placeholder"]:
-                if registry.set_current(alt_id):
-                    break
+            available = [b for b in registry.available_backends if b != "placeholder"]
+            if available:
+                # A different backend is available — try the first one
+                registry.set_current(available[0])
+                LOG.warning(
+                    "Configured backend '%s' not available, using '%s'",
+                    backend_id, available[0],
+                )
+            else:
+                LOG.warning(
+                    "No speech recognition backend installed. "
+                    "Open speak2type settings to install one."
+                )
+                return
 
-        # Get the current backend
-        backend = registry.get_or_placeholder()
+        backend = registry.current
         LOG.info("Using backend: %s (%s)", backend.id, backend.name)
 
         # Create worker thread with the backend
@@ -126,12 +207,13 @@ class Speak2TypeEngine(IBus.Engine):
         """Handle transcription error (called in main loop)."""
         LOG.error("Transcription error: %s", error)
 
-        # Clear preedit
-        self.update_preedit_text(
-            IBus.Text.new_from_string(""),
-            0,
-            False,
-        )
+        # Clear preedit (only relevant in IBus-aware apps)
+        if self._has_real_focus:
+            self.update_preedit_text(
+                IBus.Text.new_from_string(""),
+                0,
+                False,
+            )
 
         self._transition_to(EngineState.IDLE)
 
@@ -144,7 +226,16 @@ class Speak2TypeEngine(IBus.Engine):
         except Exception as e:
             LOG.warning("Failed to load record-mode setting: %s", e)
 
-        # TODO: Load custom PTT hotkey when implemented
+        try:
+            hotkey = self._settings.get_string("ptt-hotkey")
+            if hotkey and hotkey != "None":
+                self._ptt_keyval, self._ptt_modifiers = parse_accelerator(hotkey)
+                LOG.info(
+                    "PTT hotkey: '%s' -> keyval=%d, modifiers=%d",
+                    hotkey, self._ptt_keyval, self._ptt_modifiers,
+                )
+        except Exception as e:
+            LOG.warning("Failed to load ptt-hotkey setting: %s", e)
 
     def _create_properties(self) -> IBus.PropList:
         """Create IBus properties for the panel."""
@@ -229,12 +320,13 @@ class Speak2TypeEngine(IBus.Engine):
 
         self._transition_to(EngineState.RECORDING)
 
-        # Show recording indicator
-        self.update_preedit_text(
-            IBus.Text.new_from_string("🎙️ Recording..."),
-            0,
-            True,
-        )
+        # Show recording indicator (only visible in IBus-aware apps)
+        if self._has_real_focus:
+            self.update_preedit_text(
+                IBus.Text.new_from_string("🎙️ Recording..."),
+                0,
+                True,
+            )
 
         return True
 
@@ -247,12 +339,13 @@ class Speak2TypeEngine(IBus.Engine):
         # Stop audio capture and get segment
         segment = self._audio_capture.stop()
 
-        # Clear preedit
-        self.update_preedit_text(
-            IBus.Text.new_from_string(""),
-            0,
-            False,
-        )
+        # Clear preedit (only relevant in IBus-aware apps)
+        if self._has_real_focus:
+            self.update_preedit_text(
+                IBus.Text.new_from_string(""),
+                0,
+                False,
+            )
 
         if segment is None or segment.duration_ms < 200:
             LOG.info("No audio or too short, returning to idle")
@@ -261,12 +354,13 @@ class Speak2TypeEngine(IBus.Engine):
 
         self._transition_to(EngineState.TRANSCRIBING)
 
-        # Show transcribing indicator
-        self.update_preedit_text(
-            IBus.Text.new_from_string("⏳ Transcribing..."),
-            0,
-            True,
-        )
+        # Show transcribing indicator (only visible in IBus-aware apps)
+        if self._has_real_focus:
+            self.update_preedit_text(
+                IBus.Text.new_from_string("⏳ Transcribing..."),
+                0,
+                True,
+            )
 
         # Submit to worker
         if self._worker:
@@ -275,31 +369,123 @@ class Speak2TypeEngine(IBus.Engine):
                 locale = self._settings.get_string("locale") or "en_US"
             self._worker.submit(segment, locale_hint=locale)
         else:
-            LOG.warning("No worker available, using placeholder")
-            # Placeholder: directly return to idle
-            self._on_transcription_result(TranscriptResult(text="[No backend configured]"))
+            LOG.error("No backend installed — open speak2type settings to configure one")
+            self.update_preedit_text(
+                IBus.Text.new_from_string("No backend — open speak2type settings"),
+                0,
+                True,
+            )
+            GLib.timeout_add(3000, self._clear_no_backend_message)
+
+    def _clear_no_backend_message(self) -> bool:
+        """Clear the 'no backend' preedit message and return to idle."""
+        self.update_preedit_text(IBus.Text.new_from_string(""), 0, False)
+        self._transition_to(EngineState.IDLE)
+        return GLib.SOURCE_REMOVE
+
+    def _clear_error_preedit(self) -> bool:
+        """Clear an error preedit message after timeout."""
+        self.update_preedit_text(IBus.Text.new_from_string(""), 0, False)
+        return GLib.SOURCE_REMOVE
 
     def _on_transcription_result(self, result: TranscriptResult) -> None:
         """Handle transcription result (called in main loop)."""
-        # Clear preedit
-        self.update_preedit_text(
-            IBus.Text.new_from_string(""),
-            0,
-            False,
-        )
+        # Clear preedit (only relevant in IBus-aware apps)
+        if self._has_real_focus:
+            self.update_preedit_text(
+                IBus.Text.new_from_string(""),
+                0,
+                False,
+            )
+
+        if result.error:
+            LOG.error("Transcription failed: %s", result.error)
+            if self._has_real_focus:
+                self.update_preedit_text(
+                    IBus.Text.new_from_string(f"Error: {result.error}"),
+                    0,
+                    True,
+                )
+                GLib.timeout_add(3000, self._clear_error_preedit)
+            self._transition_to(EngineState.IDLE)
+            return
 
         if result.text:
             self._transition_to(EngineState.COMMITTING)
-            self.commit_text(IBus.Text.new_from_string(result.text))
-            LOG.debug("Committed text: '%s'", result.text)
+            if self._has_real_focus:
+                self.commit_text(IBus.Text.new_from_string(result.text))
+                LOG.debug("Committed text to input: '%s'", result.text)
+            else:
+                self._copy_to_clipboard(result.text)
+                LOG.debug("Copied text to clipboard: '%s'", result.text)
 
         self._transition_to(EngineState.IDLE)
+
+    def _copy_to_clipboard(self, text: str) -> None:
+        """Copy text to the system clipboard."""
+        session_type = os.environ.get("XDG_SESSION_TYPE", "")
+
+        if session_type == "wayland" and shutil.which("wl-copy"):
+            cmd = ["wl-copy", "--", text]
+        elif shutil.which("xclip"):
+            cmd = ["xclip", "-selection", "clipboard"]
+        else:
+            LOG.error("No clipboard tool found (install wl-clipboard or xclip)")
+            return
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=text if "xclip" in cmd[0] else None,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if proc.returncode != 0:
+                LOG.error("Clipboard copy failed: %s", proc.stderr)
+        except Exception as e:
+            LOG.error("Clipboard copy error: %s", e)
 
     def _on_audio_error(self, error: str) -> None:
         """Handle audio capture error."""
         LOG.error("Audio error: %s", error)
         self._transition_to(EngineState.IDLE)
 
+    # ------------------------------------------------------------------
+    # Global hotkey (XDG Desktop Portal) callbacks
+    # ------------------------------------------------------------------
+
+    def _get_accelerator_string(self) -> str:
+        """Get the PTT hotkey as a GTK accelerator string from settings."""
+        if self._settings:
+            accel = self._settings.get_string("ptt-hotkey")
+            if accel and accel != "None":
+                return accel
+        return "<Alt>space"
+
+    def _on_global_ptt_press(self) -> None:
+        """Handle global PTT key press (from portal)."""
+        if self._state == EngineState.IDLE and not self._recording_disabled:
+            self._ptt_active = True
+            self._ptt_source = "global"
+            self._start_recording()
+            LOG.info("Global PTT activated")
+
+    def _on_global_ptt_release(self) -> None:
+        """Handle global PTT key release (from portal)."""
+        if self._ptt_active and self._state == EngineState.RECORDING:
+            self._ptt_active = False
+            self._ptt_source = None
+            self._stop_recording()
+            LOG.info("Global PTT released")
+
+    def _on_hotkey_changed(self, settings: Gio.Settings, key: str) -> None:
+        """Handle PTT hotkey change from settings."""
+        accel = settings.get_string(key)
+        if accel and accel != "None":
+            self._ptt_keyval, self._ptt_modifiers = parse_accelerator(accel)
+            self._global_hotkey.update_shortcut(accel)
+            LOG.info("PTT hotkey updated: %s", accel)
 
     def _is_ptt_key(self, keyval: int, modifiers: int) -> bool:
         """Check if the key event matches the push-to-talk hotkey.
@@ -355,8 +541,9 @@ class Speak2TypeEngine(IBus.Engine):
                 # Key pressed - start recording or consume repeat
                 if self._state == EngineState.IDLE:
                     self._ptt_active = True
+                    self._ptt_source = "ibus"
                     self._start_recording()
-                    LOG.debug("PTT activated")
+                    LOG.debug("PTT activated (IBus)")
                 # Always consume press (including repeats) to prevent spaces
                 return True
 
@@ -365,6 +552,7 @@ class Speak2TypeEngine(IBus.Engine):
             if is_release and keyval == self._ptt_keyval and self._ptt_active:
                 LOG.debug("PTT released (keyval match, ptt_active=True)")
                 self._ptt_active = False
+                self._ptt_source = None
                 if self._state == EngineState.RECORDING:
                     self._stop_recording()
                 # Consume release to prevent space from leaking
@@ -412,6 +600,10 @@ class Speak2TypeEngine(IBus.Engine):
         if self._worker:
             self._worker.start()
 
+        # Set up global hotkey (portal-based, for non-IBus apps)
+        if not self._global_hotkey.setup():
+            LOG.warning("Global hotkey not available (portal missing?)")
+
         # Register properties
         self.register_properties(self._prop_list)
         self._update_state_ui()
@@ -422,6 +614,7 @@ class Speak2TypeEngine(IBus.Engine):
 
         # Reset PTT state
         self._ptt_active = False
+        self._ptt_source = None
 
         # Stop any ongoing recording
         if self._state == EngineState.RECORDING:
@@ -429,51 +622,60 @@ class Speak2TypeEngine(IBus.Engine):
 
         self._transition_to(EngineState.IDLE)
 
+        # Tear down resources symmetrically with do_enable()
+        self._global_hotkey.teardown()
+        if self._worker:
+            self._worker.stop()
+        self._audio_capture.destroy()
+
     def do_focus_in(self) -> None:
         """Called when focus enters an input context."""
         LOG.info("FOCUS IN - IBus-aware app has focus")
+        self._has_real_focus = True
         self.register_properties(self._prop_list)
         self._update_state_ui()
 
     def do_focus_out(self) -> None:
         """Called when focus leaves an input context."""
         LOG.info("FOCUS OUT - lost focus")
+        self._has_real_focus = False
 
-        # Reset PTT state
-        self._ptt_active = False
-
-        # Stop recording on focus loss
-        if self._state == EngineState.RECORDING:
-            self._audio_capture.stop()
-            self._transition_to(EngineState.IDLE)
+        # Only cancel IBus-triggered recordings on focus loss;
+        # global-hotkey recordings should survive focus changes.
+        if self._ptt_source != "global":
+            self._ptt_active = False
+            if self._state == EngineState.RECORDING:
+                self._audio_capture.stop()
+                self._transition_to(EngineState.IDLE)
 
     def do_focus_in_id(self, object_path: str, client: str) -> None:
         """Called when focus enters with client info (Wayland)."""
         LOG.info("FOCUS IN ID: path=%s, client=%s", object_path, client)
+        self._has_real_focus = client != "fake"
         self.register_properties(self._prop_list)
         self._update_state_ui()
 
     def do_focus_out_id(self, object_path: str) -> None:
         """Called when focus leaves with path info (Wayland)."""
         LOG.info("FOCUS OUT ID: path=%s", object_path)
-        # Reset PTT state
-        self._ptt_active = False
-        # Stop recording on focus loss
-        if self._state == EngineState.RECORDING:
-            self._audio_capture.stop()
-            self._transition_to(EngineState.IDLE)
+        self._has_real_focus = False
+        # Only cancel IBus-triggered recordings on focus loss
+        if self._ptt_source != "global":
+            self._ptt_active = False
+            if self._state == EngineState.RECORDING:
+                self._audio_capture.stop()
+                self._transition_to(EngineState.IDLE)
 
     def do_reset(self) -> None:
         """Called to reset the engine state."""
         LOG.info("RESET")
 
-        # Reset PTT state
-        self._ptt_active = False
-
-        # Stop recording on reset
-        if self._state == EngineState.RECORDING:
-            self._audio_capture.stop()
-            self._transition_to(EngineState.IDLE)
+        # Only cancel IBus-triggered recordings on reset
+        if self._ptt_source != "global":
+            self._ptt_active = False
+            if self._state == EngineState.RECORDING:
+                self._audio_capture.stop()
+                self._transition_to(EngineState.IDLE)
 
     def do_property_activate(self, prop_name: str, state: int) -> None:
         """Handle property activation from the panel.
@@ -495,6 +697,8 @@ class Speak2TypeEngine(IBus.Engine):
     def do_destroy(self) -> None:
         """Clean up resources."""
         LOG.info("Engine destroying")
+
+        self._global_hotkey.teardown()
 
         if self._worker:
             self._worker.stop()
@@ -544,13 +748,29 @@ class Speak2TypeEngineFactory(IBus.Factory):
         return engine
 
 
+def _get_log_level_from_settings() -> int:
+    """Read log level from GSettings, defaulting to WARNING."""
+    try:
+        schema_source = Gio.SettingsSchemaSource.get_default()
+        if schema_source and schema_source.lookup(
+            "org.freedesktop.ibus.engine.stt", True
+        ):
+            settings = Gio.Settings.new("org.freedesktop.ibus.engine.stt")
+            level_str = settings.get_string("log-level").upper()
+            return getattr(logging, level_str, logging.WARNING)
+    except Exception:
+        pass
+    return logging.WARNING
+
+
 def main() -> int:
     """Main entry point for the IBus engine."""
-    # Set up logging to file for debugging
+    # Set up logging to file
     log_file = os.path.expanduser("~/.cache/speak2type/engine.log")
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
+    log_level = _get_log_level_from_settings()
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
             logging.FileHandler(log_file),

@@ -66,10 +66,5 @@
       <default>'auto'</default>
       <description>Audio capture source: 'auto' to detect best option, 'pipewire' for native PipeWire, 'pulseaudio' for PulseAudio.</description>
     </key>
-    <key type="s" name="log-level">
-      <summary>Engine log level</summary>
-      <default>'WARNING'</default>
-      <description>Logging verbosity: DEBUG, INFO, WARNING, or ERROR. Lower levels log more detail including transcribed text.</description>
-    </key>
   </schema>
 </schemalist>

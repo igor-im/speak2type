@@ -11,7 +11,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 LOG = logging.getLogger(__name__)
 
@@ -60,8 +60,8 @@ PINNED_MODELS: dict[str, ModelSpec] = {
     "nvidia/parakeet-tdt-0.6b-v2": ModelSpec(
         id="nvidia/parakeet-tdt-0.6b-v2",
         name="Parakeet TDT 0.6B v2 (English)",
-        revision="main",  # SECURITY: Pin to specific commit before production
-        sha256="",  # SECURITY: Compute and pin SHA256 before production
+        revision="48b630d20b000e5ad3735e5378a2d9bde3f80826",
+        sha256="4a146ffd5f1401daf2738012c6e8f38b1888e276788d9f266a2b47bcf44cfc38",
         license="CC-BY-4.0",
         languages=["en"],
         size_mb=600,
@@ -70,8 +70,8 @@ PINNED_MODELS: dict[str, ModelSpec] = {
     "nvidia/parakeet-tdt-0.6b-v3-multilingual": ModelSpec(
         id="nvidia/parakeet-tdt-0.6b-v3-multilingual",
         name="Parakeet TDT 0.6B v3 (Multilingual)",
-        revision="main",  # SECURITY: Pin to specific commit before production
-        sha256="",  # SECURITY: Compute and pin SHA256 before production
+        revision="main",  # TODO: pin once HF gated-access token is available
+        sha256="",  # TODO: compute after pinning revision
         license="CC-BY-4.0",
         languages=["en", "es", "fr", "de", "it", "pt", "nl", "ja", "ko", "zh"],
         size_mb=650,
@@ -163,7 +163,7 @@ class ParakeetModelManager:
         self,
         model_id: str,
         force: bool = False,
-        progress_callback: callable | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> Path | None:
         """Download a model from HuggingFace.
 

@@ -11,8 +11,6 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import numpy as np
-
 from ..types import AudioSegment, TranscriptResult, Segment
 
 if TYPE_CHECKING:
@@ -23,13 +21,15 @@ LOG = logging.getLogger(__name__)
 # Pattern to filter out non-speech segments like [music], (applause), etc.
 SPECIAL_PATTERN = re.compile(r"^(?:\[[^\]]+\]|\([^)]+\))$", re.IGNORECASE)
 
-# Check if pywhispercpp is available
+# Check if whisper and its dependencies are available
 try:
+    import numpy as np
     from pywhispercpp.model import Model
     WHISPER_AVAILABLE = True
 except ImportError:
+    np = None  # type: ignore[assignment]
     WHISPER_AVAILABLE = False
-    LOG.warning("pywhispercpp not available. Install with: pip install pywhispercpp")
+    LOG.warning("Whisper dependencies not available. Install with: pip install pywhispercpp numpy")
 
 
 def get_xdg_data_home() -> Path:
@@ -237,8 +237,9 @@ class WhisperBackend:
         except Exception as e:
             LOG.exception("Whisper transcription error: %s", e)
             return TranscriptResult(
-                text=f"[Transcription error: {e}]",
+                text="",
                 confidence=0.0,
+                error=f"Whisper transcription error: {e}",
             )
 
     def set_model(self, model_path: str | Path) -> bool:

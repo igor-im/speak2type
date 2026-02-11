@@ -1,0 +1,13 @@
+Package: speak2type
+Version: 0.1.0-1
+Architecture: all
+Maintainer: speak2type contributors <maintainers@speak2type.invalid>
+Installed-Size: 220
+Depends: dconf-gsettings-backend | gsettings-backend, python3-gi, python3:any, ibus, python3-pip, gir1.2-ibus-1.0, gir1.2-glib-2.0, gir1.2-gstreamer-1.0, gir1.2-gst-plugins-base-1.0, gir1.2-gtk-4.0, gir1.2-adw-1, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-pipewire | gstreamer1.0-pulseaudio, wl-clipboard | xclip
+Section: utils
+Priority: optional
+Homepage: https://github.com/speak2type/speak2type
+Description: Speech-to-text input method engine for IBus
+ speak2type is a Linux desktop speech-to-text engine that integrates with IBus.
+ It provides push-to-talk dictation for any IBus-aware application and supports
+ pluggable recognition backends.

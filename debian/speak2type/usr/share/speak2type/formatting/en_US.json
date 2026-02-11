@@ -1,0 +1,178 @@
+{
+    "description" : {
+        "name" : "English (USA)",
+        "locale" : "en_US",
+        "comment" : "For a more complete example of possible values, see fr_FR file"
+    },
+    "language" : {
+        "digits" : {
+            "one" : "1",
+            "two" : "2",
+            "three" : "3",
+            "four" : "4",
+            "five" : "5",
+            "six" : "6",
+            "seven" : "7",
+            "eight" : "8",
+            "nine" : "9",
+            "zero" : "0"
+         }
+    },
+    "custom" : [{
+        "value": "I",
+        "description": "Replace 'i' by 'I'",
+        "utterances": ["i"]
+        }, {
+        "value": "I'm",
+        "description": "Replace 'i'm' by 'I'm'",
+        "utterances": ["i'm"]
+        }, {
+        "shortcut": "Control+v",
+        "description": "Paste the text",
+        "utterances": ["paste the text"]
+        }, {
+        "shortcut": "Control+BackSpace",
+        "description": "Delete the word on the left",
+        "utterances": ["delete left word"]
+        }, {
+        "shortcut": "Control+z",
+        "description": "Cancel last action",
+        "utterances": ["previous state"]
+        }, {
+        "shortcut": "Return",
+        "description": "Validate (= press 'Enter')",
+        "utterances": ["validate"]
+         }, {
+        "shortcut": "Shift+Control+Delete",
+        "description": "Delete the line",
+        "utterances": ["delete the line"]
+        }],
+    "commands" : [{
+        "value" : "digits",
+        "utterances" : ["use digits"],
+        "description" : "Toggle use of digits"
+        }, {
+        "value" : "spelling",
+        "utterances" : ["spelling mode"],
+        "description" : "Start spelling mode"
+        }, {
+        "value" : "dictation",
+        "utterances" : ["start dictation", "dictation"],
+        "description" : "Start dictation mode"
+        }, {
+        "value" : "literal",
+        "utterances" : ["start dictation without formatting", "dictation without formatting"],
+        "description" : "Start dictation without formatting"
+        }, {
+        "value" : "cancel",
+        "utterances" : ["cancel"],
+        "description" : "Cancel last utterance"
+        }],
+    "case" : [{
+        "value" : "upper all",
+        "utterances" :["capital letters"],
+        "description" : "Use only capital letters"
+        }, {
+        "value" : "upper",
+        "utterances" : ["upper case"],
+        "description" : "Capitalize the next word"
+        }, {
+        "value" : "title",
+        "utterances" : ["capitalize first letters"],
+        "description" : "Capitalize the first letters of each word"
+        }, {
+        "value" : "capitalize",
+        "utterances" : "capitalize",
+        "description" : "Capital letter"
+        }, {
+        "value" : "lower",
+        "utterances" : "lower case",
+        "description" : "Lowercase"
+        }],
+    "diacritics" :[],
+    "punctuation" : [{
+        "value" : "@",
+        "utterances" : ["at symbol", "at sign"]
+        }, {
+        "value" : "\t",
+        "utterances" : "tabulation",
+        "description" : "Tabulation"
+        }, {
+        "value" : ",",
+        "utterances" : "comma"
+        }, {
+        "value" : "…",
+        "utterances" : "ellipsis"
+        }, {
+        "value" : ".",
+        "utterances" : ["period", "full stop"]
+        }, {
+        "value" : ";",
+        "utterances" : ["semi colon", "semicolon", "semi-colon"]
+        }, {
+        "value" : ":",
+        "utterances" : "colon"
+        }, {
+        "value" : "!",
+        "utterances" : ["exclamation point", "exclamation mark"]
+        }, {
+        "value" : "?",
+        "utterances" : ["interrogation point", "interrogation mark"]
+        }, {
+        "value" : " ",
+        "utterances" : "space",
+        "description" : "Space"
+        }, {
+        "value" : "\n",
+        "utterances" : "new line",
+        "description" : "New line"
+        }, {
+        "value" : "[",
+        "utterances" : ["open brackets"]
+        }, {
+        "value" : "(",
+        "utterances" : ["open parentheses", "open a parenthesis"]
+        }, {
+        "value" : "{",
+        "utterances" : ["open braces"]
+        }, {
+        "value" : "\"",
+        "utterances" : ["start quote", "end quote"]
+        }, {
+        "value" : "]",
+        "utterances" : ["close brackets"]
+        }, {
+        "value" : ")",
+        "utterances" : ["open parentheses", "open the parenthesis"]
+        }, {
+        "value" : "}",
+        "utterances" : ["close braces"]
+        }, {
+        "value" : "'",
+        "utterances" : "apostrophe"
+        }, {
+        "value" : "+",
+        "utterances" : "plus sign"
+        }, {
+        "value" : "-",
+        "utterances" : "minus sign"
+        }, {
+        "value" : "=",
+        "utterances" : "equal sign"
+        }, {
+        "value" : "–",
+        "utterances" : ["dash sign"]
+        }, {
+        "value" : "_",
+        "utterances" : ["underscore"]
+        }, {
+        "value" : "#",
+        "utterances" : ["hash sign", "number sign"]
+        }, {
+        "value" : "\/",
+        "utterances" : "slash"
+        }, {
+        "value" : "\\",
+        "utterances" : "backslash"
+    }]
+}

@@ -138,8 +138,9 @@ class TestVoskBackend:
 
         backend = VoskBackend(model_path="/nonexistent/path")
         result = backend.transcribe(sample_audio_segment, "en_US")
-        # Should return error message, not crash
-        assert result.text is not None
+        # Should return error via error field, not crash
+        assert result.error is not None
+        assert result.text == ""
 
 
 @pytest.mark.skipif(not WHISPER_AVAILABLE, reason="pywhispercpp not installed")
@@ -160,5 +161,55 @@ class TestWhisperBackend:
 
         backend = WhisperBackend(model_path="/nonexistent/path")
         result = backend.transcribe(sample_audio_segment, "en_US")
-        # Should return error message, not crash
-        assert result.text is not None
+        # Should return error via error field, not crash
+        assert result.error is not None
+        assert result.text == ""
+
+
+class TestHttpBackendValidation:
+    """Tests for HTTP adapter endpoint validation."""
+
+    def test_constructor_rejects_http_with_auth(self):
+        from speak2type.backends.http_adapter import HttpBackend
+
+        with pytest.raises(ValueError, match="HTTPS required"):
+            HttpBackend(
+                endpoint_url="http://remote.example.com/api",
+                auth_header="Bearer sk-test",
+            )
+
+    def test_constructor_allows_http_localhost_with_auth(self):
+        from speak2type.backends.http_adapter import HttpBackend
+
+        backend = HttpBackend(
+            endpoint_url="http://localhost:8080/api",
+            auth_header="Bearer sk-test",
+        )
+        assert backend.endpoint_url == "http://localhost:8080/api"
+
+    def test_setter_rejects_http_with_auth(self):
+        from speak2type.backends.http_adapter import HttpBackend
+
+        backend = HttpBackend(
+            endpoint_url="https://api.example.com/v1",
+            auth_header="Bearer sk-test",
+        )
+        with pytest.raises(ValueError, match="HTTPS required"):
+            backend.endpoint_url = "http://remote.example.com/api"
+
+    def test_configure_rejects_http_with_auth(self):
+        from speak2type.backends.http_adapter import HttpBackend
+
+        backend = HttpBackend(
+            endpoint_url="https://api.example.com/v1",
+            auth_header="Bearer sk-test",
+        )
+        with pytest.raises(ValueError, match="HTTPS required"):
+            backend.configure(endpoint_url="http://remote.example.com/api")
+
+    def test_configure_validates_new_auth_with_existing_url(self):
+        from speak2type.backends.http_adapter import HttpBackend
+
+        backend = HttpBackend(endpoint_url="http://remote.example.com/api")
+        with pytest.raises(ValueError, match="HTTPS required"):
+            backend.configure(auth_header="Bearer sk-test")

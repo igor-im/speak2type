@@ -74,24 +74,7 @@ class HttpBackend:
             timeout_s: Request timeout in seconds.
             model: Model name for OpenAI dialect.
         """
-        # Validate endpoint URL
-        if endpoint_url is not None:
-            parsed = urlparse(endpoint_url)
-            if parsed.scheme not in ("http", "https"):
-                raise ValueError(
-                    f"Invalid endpoint URL scheme: {parsed.scheme!r}. "
-                    "Must be 'http' or 'https'."
-                )
-            if not parsed.netloc:
-                raise ValueError(f"Invalid endpoint URL: missing host in {endpoint_url!r}")
-
-            # Security: require HTTPS when auth is provided (unless localhost)
-            is_localhost = parsed.hostname in ("localhost", "127.0.0.1", "::1")
-            if auth_header and parsed.scheme != "https" and not is_localhost:
-                raise ValueError(
-                    "HTTPS required when using authentication with remote endpoints. "
-                    f"Got: {endpoint_url}"
-                )
+        self._validate_endpoint(endpoint_url, auth_header)
 
         self._endpoint_url = endpoint_url
         self._dialect = HttpDialect(dialect) if isinstance(dialect, str) else dialect
@@ -102,6 +85,34 @@ class HttpBackend:
 
         if not HTTPX_AVAILABLE:
             LOG.error("httpx not available")
+
+    @staticmethod
+    def _validate_endpoint(
+        endpoint_url: str | None, auth_header: str | None
+    ) -> None:
+        """Validate endpoint URL and security requirements.
+
+        Raises ValueError if the URL is malformed or uses HTTP with
+        authentication on a non-localhost endpoint.
+        """
+        if endpoint_url is None:
+            return
+        parsed = urlparse(endpoint_url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                f"Invalid endpoint URL scheme: {parsed.scheme!r}. "
+                "Must be 'http' or 'https'."
+            )
+        if not parsed.netloc:
+            raise ValueError(
+                f"Invalid endpoint URL: missing host in {endpoint_url!r}"
+            )
+        is_localhost = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+        if auth_header and parsed.scheme != "https" and not is_localhost:
+            raise ValueError(
+                "HTTPS required when using authentication with remote endpoints. "
+                f"Got: {endpoint_url}"
+            )
 
     @property
     def id(self) -> str:
@@ -124,6 +135,7 @@ class HttpBackend:
     @endpoint_url.setter
     def endpoint_url(self, value: str | None) -> None:
         """Set the endpoint URL."""
+        self._validate_endpoint(value, self._auth_header)
         self._endpoint_url = value
         # Close existing client to force reconnection
         if self._client:
@@ -202,20 +214,23 @@ class HttpBackend:
         except httpx.HTTPStatusError as e:
             LOG.error("HTTP error: %s", e)
             return TranscriptResult(
-                text=f"[HTTP error: {e.response.status_code}]",
+                text="",
                 confidence=0.0,
+                error=f"HTTP error: {e.response.status_code}",
             )
         except httpx.TimeoutException:
             LOG.error("Request timed out")
             return TranscriptResult(
-                text="[Request timed out]",
+                text="",
                 confidence=0.0,
+                error="Request timed out",
             )
         except Exception as e:
             LOG.exception("HTTP request failed: %s", e)
             return TranscriptResult(
-                text=f"[Request failed: {e}]",
+                text="",
                 confidence=0.0,
+                error=f"Request failed: {e}",
             )
 
     def _transcribe_openai(
@@ -268,20 +283,23 @@ class HttpBackend:
         except httpx.HTTPStatusError as e:
             LOG.error("HTTP error: %s", e)
             return TranscriptResult(
-                text=f"[HTTP error: {e.response.status_code}]",
+                text="",
                 confidence=0.0,
+                error=f"HTTP error: {e.response.status_code}",
             )
         except httpx.TimeoutException:
             LOG.error("Request timed out")
             return TranscriptResult(
-                text="[Request timed out]",
+                text="",
                 confidence=0.0,
+                error="Request timed out",
             )
         except Exception as e:
             LOG.exception("HTTP request failed: %s", e)
             return TranscriptResult(
-                text=f"[Request failed: {e}]",
+                text="",
                 confidence=0.0,
+                error=f"Request failed: {e}",
             )
 
     def transcribe(
@@ -384,6 +402,11 @@ class HttpBackend:
             timeout_s: Request timeout in seconds.
             model: Model name for OpenAI dialect.
         """
+        # Validate the new combination before applying any changes
+        effective_url = endpoint_url if endpoint_url is not None else self._endpoint_url
+        effective_auth = auth_header if auth_header is not None else self._auth_header
+        self._validate_endpoint(effective_url, effective_auth)
+
         if endpoint_url is not None:
             self._endpoint_url = endpoint_url
 
