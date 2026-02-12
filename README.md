@@ -17,6 +17,12 @@ It supports both native IBus text input and non-IBus app workflows.
 - **Privacy safeguard (IBus-aware fields)**: recording is disabled for `PASSWORD`/`PIN` input purposes
 - **Global hotkey support** via desktop portal listener
 
+- Chrome (Native Ibus)
+https://youtu.be/QUHK7w-qBb0
+
+- VS Code (Electron, non-Ibus)
+https://youtu.be/O3MZFxC4ipE
+
 ## Platform requirements
 
 Minimum expected environment:
