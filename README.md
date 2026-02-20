@@ -36,11 +36,18 @@ ibus restart
 # Add "Speech To Text" input source in GNOME Settings
 ```
 
+## GNOME Settings
+
+For the best push-to-talk experience, adjust these settings in **GNOME Settings → Accessibility → Typing**:
+
+- **Repeat Keys**: **Off** — prevents the PTT key from flooding spaces while held
+- **Sticky Keys**: **On** — allows modifier+key combos to be registered cleanly by the portal
+
 ## Usage
 
 1. Select "Speech To Text" as your input source
 2. Focus any text field
-3. Hold **Alt+Space** and speak
+3. Hold **Ctrl+Space** and speak
 4. Release to transcribe and commit text
 
 ## Development

@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 import gi
 
@@ -154,6 +155,24 @@ class Speak2TypeEngine(IBus.Engine):
 
         # Pending text for commit
         self._pending_text = ""
+
+        # Track PTT key repeats that may leak to non-IBus apps as characters
+        self._leaked_space_count = 0
+        # Timestamp when recording started (for time-based leaked key estimate)
+        self._ptt_start_time: float = 0.0
+
+        # Absorb bare PTT key events after PTT ends.
+        # When the user releases the modifier (e.g. Ctrl) before the key
+        # (e.g. Space), keyboard auto-repeat continues sending the key
+        # without modifiers.  The engine doesn't recognise these as PTT
+        # presses so they leak as characters.  This flag suppresses ALL
+        # events for the PTT keyval until its physical release is seen.
+        self._absorb_ptt_key = False
+        self._absorb_timeout_id: int = 0
+        # Require seeing a physical PTT key release before allowing
+        # re-activation.  Prevents auto-repeat events from starting a new
+        # recording session after the absorb timeout expires.
+        self._ptt_key_physically_released = True
 
         LOG.info("Speak2TypeEngine created")
 
@@ -318,6 +337,8 @@ class Speak2TypeEngine(IBus.Engine):
             LOG.error("Failed to start audio capture")
             return False
 
+        self._leaked_space_count = 0
+        self._ptt_start_time = time.monotonic()
         self._transition_to(EngineState.RECORDING)
 
         # Show recording indicator (only visible in IBus-aware apps)
@@ -416,35 +437,130 @@ class Speak2TypeEngine(IBus.Engine):
                 self.commit_text(IBus.Text.new_from_string(result.text))
                 LOG.debug("Committed text to input: '%s'", result.text)
             else:
-                self._copy_to_clipboard(result.text)
-                LOG.debug("Copied text to clipboard: '%s'", result.text)
+                self._type_text_unfocused(result.text)
 
         self._transition_to(EngineState.IDLE)
 
     def _copy_to_clipboard(self, text: str) -> None:
-        """Copy text to the system clipboard."""
+        """Copy text to the system clipboard.
+
+        On Wayland, wl-copy stays resident to serve the clipboard content.
+        We use Popen (fire-and-forget) so it does not block the main loop.
+        """
         session_type = os.environ.get("XDG_SESSION_TYPE", "")
 
-        if session_type == "wayland" and shutil.which("wl-copy"):
-            cmd = ["wl-copy", "--", text]
-        elif shutil.which("xclip"):
-            cmd = ["xclip", "-selection", "clipboard"]
+        try:
+            if session_type == "wayland" and shutil.which("wl-copy"):
+                # wl-copy stays alive to serve clipboard; don't wait for it.
+                subprocess.Popen(
+                    ["wl-copy", "--", text],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            elif shutil.which("xclip"):
+                subprocess.run(
+                    ["xclip", "-selection", "clipboard"],
+                    input=text,
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+            else:
+                LOG.error("No clipboard tool found (install wl-clipboard or xclip)")
+        except Exception as e:
+            LOG.error("Clipboard copy error: %s", e)
+
+    def _type_text_unfocused(self, text: str) -> None:
+        """Type text into the focused application when not IBus-focused.
+
+        For non-IBus apps (VS Code, Electron, XWayland), IBus commit_text
+        does not work.  This method:
+        1. Estimates leaked Space characters from PTT key repeat.
+        2. Copies the transcribed text to clipboard.
+        3. Simulates Ctrl+V to paste it into the app.
+
+        Falls back to clipboard-only if no key-simulation tool is available.
+        """
+        leaked = self._leaked_space_count
+        self._leaked_space_count = 0
+
+        # When PTT is triggered via the portal (non-IBus apps), the engine
+        # never receives key events, so _leaked_space_count stays at zero.
+        # Estimate leaked keys from the recording duration instead.
+        # Typical key repeat: ~500ms initial delay then ~30ms per repeat.
+        if leaked == 0 and self._ptt_start_time > 0:
+            elapsed = time.monotonic() - self._ptt_start_time
+            # Subtract initial key repeat delay (~0.5s) and convert to count
+            repeat_time = max(0.0, elapsed - 0.5)
+            leaked = int(repeat_time / 0.030)  # ~33 repeats per second
+            if leaked > 0:
+                LOG.debug(
+                    "Estimated %d leaked keys from %.2fs recording", leaked, elapsed
+                )
+
+        self._copy_to_clipboard(text)
+
+        session_type = os.environ.get("XDG_SESSION_TYPE", "")
+
+        if session_type == "wayland" and shutil.which("wtype"):
+            self._paste_with_wtype(leaked)
+        elif shutil.which("xdotool"):
+            self._paste_with_xdotool(leaked)
         else:
-            LOG.error("No clipboard tool found (install wl-clipboard or xclip)")
+            LOG.info(
+                "Text copied to clipboard (install wtype or xdotool for auto-paste)"
+            )
             return
 
+        LOG.debug(
+            "Typed text into unfocused app (cleaned %d leaked keys): '%s'",
+            leaked, text,
+        )
+
+    def _paste_with_wtype(self, leaked_spaces: int) -> None:
+        """Clean up leaked spaces and paste clipboard using wtype (Wayland)."""
+        cmd: list[str] = ["wtype"]
+
+        # Select leaked characters (Shift+Left×N) so paste replaces them
+        if leaked_spaces > 0:
+            cmd.extend(["-M", "shift"])
+            for _ in range(leaked_spaces):
+                cmd.extend(["-k", "Left"])
+            cmd.extend(["-m", "shift"])
+            # Small delay so the app processes the selection before paste
+            cmd.extend(["-s", "50"])
+
+        # Ctrl+V to paste from clipboard
+        cmd.extend(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
+
         try:
-            proc = subprocess.run(
-                cmd,
-                input=text if "xclip" in cmd[0] else None,
+            subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        except Exception as e:
+            LOG.error("wtype paste failed: %s", e)
+
+    def _paste_with_xdotool(self, leaked_spaces: int) -> None:
+        """Clean up leaked spaces and paste clipboard using xdotool (X11)."""
+        try:
+            # Select leaked characters (Shift+Left×N) so paste replaces them
+            if leaked_spaces > 0:
+                keys = ["shift+Left"] * leaked_spaces
+                subprocess.run(
+                    ["xdotool", "key", "--delay", "0"] + keys,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+
+            # Ctrl+V to paste from clipboard
+            subprocess.run(
+                ["xdotool", "key", "ctrl+v"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            if proc.returncode != 0:
-                LOG.error("Clipboard copy failed: %s", proc.stderr)
         except Exception as e:
-            LOG.error("Clipboard copy error: %s", e)
+            LOG.error("xdotool paste failed: %s", e)
 
     def _on_audio_error(self, error: str) -> None:
         """Handle audio capture error."""
@@ -468,6 +584,8 @@ class Speak2TypeEngine(IBus.Engine):
         if self._state == EngineState.IDLE and not self._recording_disabled:
             self._ptt_active = True
             self._ptt_source = "global"
+            self._absorb_ptt_key = True
+            self._ptt_key_physically_released = False
             self._start_recording()
             LOG.info("Global PTT activated")
 
@@ -478,6 +596,32 @@ class Speak2TypeEngine(IBus.Engine):
             self._ptt_source = None
             self._stop_recording()
             LOG.info("Global PTT released")
+        # Schedule a safety timeout to clear the absorb flag in case the
+        # IBus key release event never arrives (e.g. pure portal-only app).
+        self._schedule_absorb_timeout()
+
+    def _schedule_absorb_timeout(self) -> None:
+        """Schedule a safety timeout to clear _absorb_ptt_key.
+
+        If the IBus key release event never arrives (e.g. the focused app
+        doesn't forward releases), the flag would stay set and eat the
+        next normal Space press.  This timeout clears it after 1 second.
+        """
+        self._cancel_absorb_timeout()
+        self._absorb_timeout_id = GLib.timeout_add(1000, self._absorb_timeout_cb)
+
+    def _cancel_absorb_timeout(self) -> None:
+        """Cancel any pending absorb-flag timeout."""
+        if self._absorb_timeout_id:
+            GLib.source_remove(self._absorb_timeout_id)
+            self._absorb_timeout_id = 0
+
+    def _absorb_timeout_cb(self) -> bool:
+        """GLib timeout callback — clear the absorb flag."""
+        LOG.debug("Absorb timeout expired — clearing flag")
+        self._absorb_ptt_key = False
+        self._absorb_timeout_id = 0
+        return GLib.SOURCE_REMOVE
 
     def _on_hotkey_changed(self, settings: Gio.Settings, key: str) -> None:
         """Handle PTT hotkey change from settings."""
@@ -536,14 +680,53 @@ class Speak2TypeEngine(IBus.Engine):
         LOG.debug("PTT check: keyval=%d (want %d), mods=%d (want %d), state=%s",
                   keyval, self._ptt_keyval, relevant_mods, self._ptt_modifiers, self._state)
         if self._record_mode == RecordMode.PUSH_TO_TALK:
+            # ---------------------------------------------------------
+            # Absorb bare PTT key events after PTT deactivation.
+            #
+            # When the user releases the modifier (Ctrl) before the key
+            # (Space), keyboard auto-repeat keeps firing Space *without*
+            # the modifier.  Without this guard those bare-space events
+            # slip past _is_ptt_key() and flood the app.  We consume
+            # every event for the PTT keyval until its physical release.
+            # ---------------------------------------------------------
+            if self._absorb_ptt_key and keyval == self._ptt_keyval:
+                if is_release:
+                    self._absorb_ptt_key = False
+                    self._ptt_key_physically_released = True
+                    self._cancel_absorb_timeout()
+                    LOG.debug("PTT key released — absorb ended")
+                    # The physical PTT key was released.  If we are still
+                    # recording (the normal case when the user lifts the
+                    # key), we must stop recording here because the absorb
+                    # guard would otherwise swallow the event before the
+                    # PTT-release check below gets a chance to run.
+                    if self._ptt_active:
+                        self._ptt_active = False
+                        self._ptt_source = None
+                        if self._state == EngineState.RECORDING:
+                            self._stop_recording()
+                            LOG.debug("PTT released via absorb guard")
+                return True
+
             # Check for PTT activation (press with correct modifiers)
             if not is_release and self._is_ptt_key(keyval, state):
                 # Key pressed - start recording or consume repeat
                 if self._state == EngineState.IDLE:
+                    if not self._ptt_key_physically_released:
+                        # Still auto-repeating from a previous session
+                        # (absorb timeout expired but key wasn't released).
+                        # Consume without starting a new recording.
+                        return True
                     self._ptt_active = True
                     self._ptt_source = "ibus"
+                    self._absorb_ptt_key = True
+                    self._ptt_key_physically_released = False
                     self._start_recording()
                     LOG.debug("PTT activated (IBus)")
+                elif self._state == EngineState.RECORDING:
+                    # Track key repeats: some IBus clients (Electron/XWayland)
+                    # ignore the consumed return value, leaking space characters.
+                    self._leaked_space_count += 1
                 # Always consume press (including repeats) to prevent spaces
                 return True
 
@@ -553,10 +736,20 @@ class Speak2TypeEngine(IBus.Engine):
                 LOG.debug("PTT released (keyval match, ptt_active=True)")
                 self._ptt_active = False
                 self._ptt_source = None
+                self._absorb_ptt_key = False
+                self._ptt_key_physically_released = True
+                self._cancel_absorb_timeout()
                 if self._state == EngineState.RECORDING:
                     self._stop_recording()
                 # Consume release to prevent space from leaking
                 return True
+
+        # Track physical release of the PTT key even when no guard is active.
+        # After the absorb timeout expires with the key still held, we need
+        # to see a release before allowing the next PTT activation.
+        if is_release and keyval == self._ptt_keyval and not self._ptt_key_physically_released:
+            self._ptt_key_physically_released = True
+            LOG.debug("PTT key physical release detected (post-timeout)")
 
         # Let other keys pass through
         return False
