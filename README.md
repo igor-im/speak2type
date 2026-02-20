@@ -72,6 +72,19 @@ sudo apt-get install -y ../speak2type_0.1.0-1_all.deb
 ibus restart
 ```
 
+## GNOME Settings
+
+For the best push-to-talk experience, adjust these settings in **GNOME Settings → Accessibility → Typing**:
+
+- **Repeat Keys**: **Off** — prevents the PTT key from flooding spaces while held
+- **Sticky Keys**: **On** — allows modifier+key combos to be registered cleanly by the portal
+
+## Usage
+
+1. Select "Speech To Text" as your input source
+2. Focus any text field
+3. Hold **Ctrl+Space** and speak
+4. Release to transcribe and commit text
 After install, add **Speech To Text** as an input source in GNOME Settings.
 
 For detailed packaging steps, see `debian/README.build.md`.
